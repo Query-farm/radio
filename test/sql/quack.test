@@ -1,23 +1,23 @@
-# name: test/sql/quack.test
-# description: test quack extension
-# group: [quack]
+# name: test/sql/radio.test
+# description: test radio extension
+# group: [radio]
 
 # Before we load the extension, this will fail
 statement error
-SELECT quack('Sam');
+SELECT radio('Sam');
 ----
-Catalog Error: Scalar Function with name quack does not exist!
+Catalog Error: Scalar Function with name radio does not exist!
 
 # Require statement will ensure this test is run with this extension loaded
-require quack
+require radio
 
 # Confirm the extension works
 query I
-SELECT quack('Sam');
+SELECT radio('Sam');
 ----
 Quack Sam 🐥
 
 query I
-SELECT quack_openssl_version('Michael') ILIKE 'Quack Michael, my linked OpenSSL version is OpenSSL%';
+SELECT radio_openssl_version('Michael') ILIKE 'Quack Michael, my linked OpenSSL version is OpenSSL%';
 ----
 true

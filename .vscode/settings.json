@@ -1,0 +1,10 @@
+{
+  "files.exclude": {
+    "build/**": true,
+    "extension-ci-tools/**": true,
+    "vcpkg/.github/**": true,
+    "vcpkg/buildtrees/**": true,
+    "vcpkg/downloads/**": true,
+    "vcpkg/packages/**": true
+  }
+}
