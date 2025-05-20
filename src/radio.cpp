@@ -29,6 +29,7 @@ std::shared_ptr<RadioSubscription> Radio::AddSubscription(const std::string &url
 	auto new_id = subscription_id_++;
 	subscriptions_[new_id] =
 	    std::make_shared<RadioSubscription>(new_id, url, max_queued_messages, creation_time, *this);
+	std::make_shared<RadioSubscription>(new_id, url, max_queued_messages, creation_time, *this);
 	return subscriptions_[new_id];
 }
 
