@@ -6,5 +6,8 @@
     "vcpkg/buildtrees/**": true,
     "vcpkg/downloads/**": true,
     "vcpkg/packages/**": true
+  },
+  "files.associations": {
+    "vector": "cpp"
   }
 }
