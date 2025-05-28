@@ -27,4 +27,4 @@ select * from radio_subscription_messages('http://example.com/stream2', 'message
 select * from radio_subscription_messages('http://example.com/stream2', 'message');
 
 
-select * from radio_messages();
+select * from radio_received_messages();

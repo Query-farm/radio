@@ -186,6 +186,8 @@ void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, Data
 
 	auto &subscription = bind_data.subscriptions_[bind_data.rows_returned++];
 
+	auto state = subscription->state();
+
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
 
 	FlatVector::GetData<string_t>(output.data[1])[0] =
@@ -196,11 +198,23 @@ void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, Data
 	STORE_NULLABLE_TIMESTAMP(output.data[3], subscription->activation_time());
 	FlatVector::GetData<bool>(output.data[4])[0] = subscription->disabled() ? 1 : 0;
 
-	STORE_NULLABLE_TIMESTAMP(output.data[5], subscription->get_latest_receive_time(RadioReceivedMessage::ERROR));
-	STORE_NULLABLE_TIMESTAMP(output.data[6], subscription->get_latest_receive_time(RadioReceivedMessage::MESSAGE));
+	STORE_NULLABLE_TIMESTAMP(output.data[5], state.received_errors.latest_receive_time);
 
-	FlatVector::GetData<uint64_t>(output.data[7])[0] = subscription->message_odometer(RadioReceivedMessage::ERROR);
-	FlatVector::GetData<uint64_t>(output.data[8])[0] = subscription->message_odometer(RadioReceivedMessage::MESSAGE);
+	STORE_NULLABLE_TIMESTAMP(output.data[6], state.received_messages.latest_receive_time);
+
+	FlatVector::GetData<uint64_t>(output.data[7])[0] = state.received_errors.odometer;
+
+	FlatVector::GetData<uint64_t>(output.data[8])[0] = state.received_messages.odometer;
+
+	FlatVector::GetData<uint64_t>(output.data[9])[0] = state.transmit.odometer;
+	FlatVector::GetData<uint64_t>(output.data[10])[0] = state.transmit.dropped_unprocessed;
+
+	STORE_NULLABLE_TIMESTAMP(output.data[11], state.transmit.latest_queue_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[12], state.transmit.latest_success_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[13], state.transmit.latest_failure_time);
+
+	FlatVector::GetData<uint64_t>(output.data[14])[0] = state.transmit.transmit_successes;
+	FlatVector::GetData<uint64_t>(output.data[15])[0] = state.transmit.transmit_failures;
 
 	output.SetCardinality(1);
 }
@@ -227,16 +241,37 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 	// Ideally we'd have a struct since we have repeated fields per queue.
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
-	names.emplace_back("last_error_time");
+	names.emplace_back("received_last_error_time");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
-	names.emplace_back("last_message_time");
+	names.emplace_back("received_last_message_time");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
-	names.emplace_back("errors_processed");
+	names.emplace_back("received_errors_processed");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
-	names.emplace_back("messages_processed");
+	names.emplace_back("received_messages_processed");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("transmit_messages_processed");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("transmit_messages_dropped");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
+	names.emplace_back("transmit_last_queue_time");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
+	names.emplace_back("transmit_last_success_time");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
+	names.emplace_back("transmit_last_failure_time");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("transmit_successes");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("transmit_failures");
 
 	return make_uniq<RadioSubscriptionsBindData>(GetRadio());
 }
@@ -302,8 +337,8 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 		while (bind_data.current_subscription_index < bind_data.subscriptions_.size()) {
 			auto &subscription = bind_data.subscriptions_[bind_data.current_subscription_index++];
 
-			auto messages_pending = subscription->get_queue_size(RadioReceivedMessage::MESSAGE);
-			auto errors_pending = subscription->get_queue_size(RadioReceivedMessage::ERROR);
+			auto messages_pending = subscription->receive_queue_size(RadioReceivedMessage::MESSAGE);
+			auto errors_pending = subscription->receive_queue_size(RadioReceivedMessage::ERROR);
 			if (messages_pending == 0 && errors_pending == 0) {
 				continue;
 			}
@@ -359,14 +394,14 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 	output.SetCardinality(0);
 }
 
-struct RadioMessagesBindData : public TableFunctionData {
-	explicit RadioMessagesBindData(Radio &radio) {
+struct RadioReceivedMessagesBindData : public TableFunctionData {
+	explicit RadioReceivedMessagesBindData(Radio &radio) {
 		for (auto &subscription : radio.GetSubscriptions()) {
 			// Add all messages for each subscription.
-			for (auto &message : subscription->snapshot_messages(RadioReceivedMessage::MESSAGE)) {
+			for (auto &message : subscription->receive_snapshot(RadioReceivedMessage::MESSAGE)) {
 				messages_.emplace_back(subscription, message);
 			}
-			for (auto &message : subscription->snapshot_messages(RadioReceivedMessage::ERROR)) {
+			for (auto &message : subscription->receive_snapshot(RadioReceivedMessage::ERROR)) {
 				messages_.emplace_back(subscription, message);
 			}
 		}
@@ -376,8 +411,8 @@ struct RadioMessagesBindData : public TableFunctionData {
 	vector<std::pair<std::shared_ptr<RadioSubscription>, std::shared_ptr<RadioReceivedMessage>>> messages_;
 };
 
-static unique_ptr<FunctionData> RadioMessagesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context, TableFunctionBindInput &input,
+                                                          vector<LogicalType> &return_types, vector<string> &names) {
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
@@ -397,12 +432,12 @@ static unique_ptr<FunctionData> RadioMessagesBind(ClientContext &context, TableF
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("message");
 
-	return make_uniq<RadioMessagesBindData>(GetRadio());
+	return make_uniq<RadioReceivedMessagesBindData>(GetRadio());
 }
 
-void RadioMessages(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioMessagesBindData>();
+	auto &bind_data = data_p.bind_data->CastNoConst<RadioReceivedMessagesBindData>();
 
 	if (bind_data.current_row >= bind_data.messages_.size()) {
 		// No more messages to return.
@@ -449,10 +484,6 @@ static void LoadInternal(DatabaseInstance &instance) {
 	//                                         RadioTransmitFunction);
 	// ExtensionUtil::RegisterFunction(instance, transmit_function);
 
-	// auto is_tuned_function =
-	//     ScalarFunction("is_tuned", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, RadioIsTunedFunction);
-	// ExtensionUtil::RegisterFunction(instance, is_tuned_function);
-
 	// auto turn_off_function =
 	//     ScalarFunction("turn_off", {LogicalType::VARCHAR}, LogicalType::SQLNULL, RadioTurnOffFunction);
 	// ExtensionUtil::RegisterFunction(instance, turn_off_function);
@@ -466,8 +497,9 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto subscriptions_function = TableFunction("radio_subscriptions", {}, RadioSubscriptions, RadioSubscriptionsBind);
 	ExtensionUtil::RegisterFunction(instance, subscriptions_function);
 
-	auto messages_function = TableFunction("radio_messages", {}, RadioMessages, RadioMessagesBind);
-	ExtensionUtil::RegisterFunction(instance, messages_function);
+	auto received_messages_function =
+	    TableFunction("radio_received_messages", {}, RadioReceivedMessages, RadioReceivedMessagesBind);
+	ExtensionUtil::RegisterFunction(instance, received_messages_function);
 
 	RadioSubscriptionAddFunctions(instance);
 }

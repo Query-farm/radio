@@ -80,7 +80,7 @@ struct RadioSubscriptionMessagesBindData : public TableFunctionData {
 	explicit RadioSubscriptionMessagesBindData(Radio &radio, std::shared_ptr<RadioSubscription> subscription,
 	                                           RadioReceivedMessage::MessageType message_type)
 	    : radio_(radio), subscription_(subscription) {
-		messages_ = subscription->snapshot_messages(message_type);
+		messages_ = subscription->receive_snapshot(message_type);
 	}
 
 	Radio &radio_;

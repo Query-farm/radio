@@ -8,6 +8,7 @@
     "vcpkg/packages/**": true
   },
   "files.associations": {
-    "vector": "cpp"
+    "vector": "cpp",
+    "map": "cpp"
   }
 }

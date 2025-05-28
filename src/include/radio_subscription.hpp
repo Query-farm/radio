@@ -2,37 +2,47 @@
 #include "radio_extension.hpp"
 #include "radio_received_message.hpp"
 #include "radio_received_message_queue.hpp"
+#include "radio_transmit_message.hpp"
+#include "radio_transmit_message_queue.hpp"
 #include "radio.hpp"
 
 namespace duckdb {
 
 class Radio;
+
+struct RadioSubscriptionQueueState {
+	RadioReceivedMessageQueueState received_messages;
+	RadioReceivedMessageQueueState received_errors;
+	RadioTransmitMessageQueueState transmit;
+};
+
 class RadioSubscription {
 
 private:
 	RadioReceivedMessageQueue &get_queue_for_type(const RadioReceivedMessage::MessageType type) {
 		switch (type) {
 		case RadioReceivedMessage::MESSAGE:
-			return messages_;
+			return received_messages_;
 		case RadioReceivedMessage::ERROR:
-			return errors_;
+			return received_errors_;
 		default:
 			throw std::runtime_error("Unknown message type");
 		}
 	}
 
 public:
-	explicit RadioSubscription(const uint64_t id, const std::string &url, uint32_t max_queued_messages,
-	                           uint64_t creation_time, Radio &radio)
+	explicit RadioSubscription(const uint64_t id, const std::string &url, uint32_t receive_queue_size,
+	                           uint32_t transmit_queue_size, uint64_t creation_time, Radio &radio)
 	    : id_(id), url_(std::move(url)), creation_time_(creation_time), disabled_(false),
-	      messages_(max_queued_messages), radio_(radio) {
+	      received_messages_(receive_queue_size), received_errors_(receive_queue_size),
+	      transmit_messages_(transmit_queue_size), radio_(radio) {
 	}
 
-	void set_queue_size(RadioReceivedMessage::MessageType type, uint32_t max_queued_messages) {
-		get_queue_for_type(type).resize(max_queued_messages);
+	void set_receive_queue_size(RadioReceivedMessage::MessageType type, uint32_t capacity) {
+		get_queue_for_type(type).resize(capacity);
 	}
 
-	std::vector<std::shared_ptr<RadioReceivedMessage>> snapshot_messages(RadioReceivedMessage::MessageType type) {
+	std::vector<std::shared_ptr<RadioReceivedMessage>> receive_snapshot(RadioReceivedMessage::MessageType type) {
 		return get_queue_for_type(type).snapshot();
 	}
 
@@ -45,7 +55,7 @@ public:
 		return url_;
 	}
 
-	uint64_t get_queue_size(RadioReceivedMessage::MessageType type) {
+	uint64_t receive_queue_size(RadioReceivedMessage::MessageType type) {
 		return get_queue_for_type(type).size();
 	}
 
@@ -57,12 +67,12 @@ public:
 		return activation_time_;
 	}
 
-	uint64_t get_latest_receive_time(RadioReceivedMessage::MessageType type) {
-		return get_queue_for_type(type).latest_receive_time();
-	}
-
-	uint64_t message_odometer(RadioReceivedMessage::MessageType type) {
-		return get_queue_for_type(type).get_odometer();
+	RadioSubscriptionQueueState state() {
+		RadioSubscriptionQueueState state;
+		state.received_messages = get_queue_for_type(RadioReceivedMessage::MESSAGE).state();
+		state.received_errors = get_queue_for_type(RadioReceivedMessage::ERROR).state();
+		state.transmit = transmit_messages_.state();
+		return state;
 	}
 
 	bool disabled() const {
@@ -119,11 +129,13 @@ private:
 	// Indicate if this subscription should be disabled.
 	bool disabled_ = false;
 
-	// Store the latest error message.
-	RadioReceivedMessageQueue errors_ {10};
-
 	// Keep a queue of messages here, so its easier to manage rather than a shared queue.
-	RadioReceivedMessageQueue messages_ {10};
+	RadioReceivedMessageQueue received_messages_ {10};
+
+	// Store the latest error message.
+	RadioReceivedMessageQueue received_errors_ {10};
+
+	RadioTransmitMessageQueue transmit_messages_ {10};
 
 	Radio &radio_;
 };

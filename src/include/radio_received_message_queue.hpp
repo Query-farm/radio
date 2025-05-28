@@ -4,6 +4,14 @@
 
 namespace duckdb {
 
+struct RadioReceivedMessageQueueState {
+	uint64_t odometer = 0;
+
+	uint64_t dropped_unseen = 0;
+
+	uint64_t latest_receive_time = 0;
+};
+
 class RadioReceivedMessageQueue {
 public:
 	RadioReceivedMessageQueue(size_t capacity) : capacity_(capacity) {
@@ -12,17 +20,17 @@ public:
 	void push(const std::vector<std::shared_ptr<RadioReceivedMessage>> &items) {
 		std::lock_guard<std::mutex> lock(mtx);
 
-		odometer_ += items.size();
+		state_.odometer += items.size();
 		for (auto &item : items) {
 			if (queue_.size() >= capacity_) {
 				auto &front = queue_.front();
 				if (front->seen_count() == 0) {
-					dropped_unseen_++;
+					state_.dropped_unseen++;
 				}
 				queue_.pop_front(); // Drop oldest
 			}
-			latest_receive_time_ =
-			    item->receive_time() > latest_receive_time_ ? item->receive_time() : latest_receive_time_;
+			state_.latest_receive_time =
+			    item->receive_time() > state_.latest_receive_time ? item->receive_time() : state_.latest_receive_time;
 			queue_.push_back(item);
 		}
 	}
@@ -34,7 +42,7 @@ public:
 		}
 		auto item = queue_.front();
 		if (item->seen_count() == 0) {
-			dropped_unseen_++;
+			state_.dropped_unseen++;
 		}
 		queue_.pop_front();
 		return item;
@@ -54,7 +62,7 @@ public:
 		while (queue_.size() > capacity_) {
 			auto item = queue_.front();
 			if (item->seen_count() == 0) {
-				dropped_unseen_++;
+				state_.dropped_unseen++;
 			}
 			queue_.pop_front();
 		}
@@ -79,11 +87,6 @@ public:
 		return capacity_;
 	}
 
-	uint64_t dropped_unseen() const {
-		std::lock_guard<std::mutex> lock(mtx);
-		return dropped_unseen_;
-	}
-
 	bool empty() const {
 		std::lock_guard<std::mutex> lock(mtx);
 		return queue_.empty();
@@ -94,26 +97,17 @@ public:
 		queue_.clear();
 	}
 
-	uint64_t latest_receive_time() const {
+	RadioReceivedMessageQueueState state() const {
 		std::lock_guard<std::mutex> lock(mtx);
-		return latest_receive_time_;
-	}
-
-	uint64_t get_odometer() const {
-		std::lock_guard<std::mutex> lock(mtx);
-		return odometer_;
+		return state_;
 	}
 
 private:
 	uint64_t capacity_;
 
-	uint64_t odometer_ = 0;
-
-	uint64_t dropped_unseen_ = 0;
+	RadioReceivedMessageQueueState state_;
 
 	std::deque<std::shared_ptr<RadioReceivedMessage>> queue_;
-
-	uint64_t latest_receive_time_ = 0;
 
 	mutable std::mutex mtx;
 };
