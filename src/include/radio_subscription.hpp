@@ -42,17 +42,13 @@ public:
 		webSocket.setUrl(url_);
 		webSocket.setOnMessageCallback([this](const ix::WebSocketMessagePtr &msg) {
 			if (msg->type == ix::WebSocketMessageType::Message) {
-				//				printf("Received message: %s\n", msg->str.c_str());
 				this->add_received_messages(RadioReceivedMessage::MessageType::MESSAGE,
 				                            {{msg->str, RadioCurrentTimeMillis()}});
 			} else if (msg->type == ix::WebSocketMessageType::Open) {
-				//				printf("WebSocket connection opened\n");
-				this->is_connected_ = true;
+				this->activation_time_ = RadioCurrentTimeMillis();
 			} else if (msg->type == ix::WebSocketMessageType::Close) {
-				//				printf("WebSocket connection closed\n");
-				this->is_connected_ = false;
+				this->activation_time_ = 0;
 			} else if (msg->type == ix::WebSocketMessageType::Error) {
-				//				printf("WebSocket error: %s\n", msg->errorInfo.reason.c_str());
 				this->add_received_messages(RadioReceivedMessage::MessageType::ERROR,
 				                            {{msg->errorInfo.reason, RadioCurrentTimeMillis()}});
 			}
@@ -113,6 +109,11 @@ public:
 	}
 
 	void set_disabled(bool disabled) {
+		if (disabled) {
+			webSocket.stop();
+		} else {
+			webSocket.start();
+		}
 		disabled_ = disabled;
 	}
 
@@ -179,8 +180,6 @@ private:
 
 	// Indicate if this subscription should be disabled.
 	bool disabled_ = false;
-
-	bool is_connected_ = false;
 
 	// Keep a queue of messages here, so its easier to manage rather than a shared queue.
 	RadioReceivedMessageQueue received_messages_ {10};
