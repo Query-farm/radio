@@ -16,7 +16,7 @@ public:
 		for (auto &item : items) {
 			if (queue_.size() >= capacity_) {
 				auto &front = queue_.front();
-				if (front->get_seen_count() == 0) {
+				if (front->seen_count() == 0) {
 					dropped_unseen_++;
 				}
 				queue_.pop_front(); // Drop oldest
@@ -33,7 +33,7 @@ public:
 			return nullptr;
 		}
 		auto item = queue_.front();
-		if (item->get_seen_count() == 0) {
+		if (item->seen_count() == 0) {
 			dropped_unseen_++;
 		}
 		queue_.pop_front();
@@ -42,6 +42,9 @@ public:
 
 	std::vector<std::shared_ptr<RadioReceivedMessage>> snapshot() const {
 		std::lock_guard<std::mutex> lock(mtx);
+		for (const auto &item : queue_) {
+			item->increment_seen_count();
+		}
 		return std::vector<std::shared_ptr<RadioReceivedMessage>>(queue_.begin(), queue_.end());
 	}
 
@@ -50,7 +53,7 @@ public:
 		capacity_ = new_capacity;
 		while (queue_.size() > capacity_) {
 			auto item = queue_.front();
-			if (item->get_seen_count() == 0) {
+			if (item->seen_count() == 0) {
 				dropped_unseen_++;
 			}
 			queue_.pop_front();
@@ -61,7 +64,7 @@ public:
 		std::lock_guard<std::mutex> lock(mtx);
 		queue_.erase(std::remove_if(queue_.begin(), queue_.end(),
 		                            [&](const std::shared_ptr<RadioReceivedMessage> &item) {
-			                            return ids_to_remove.count(item->get_id()) > 0;
+			                            return ids_to_remove.count(item->id()) > 0;
 		                            }),
 		             queue_.end());
 	}

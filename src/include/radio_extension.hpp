@@ -5,6 +5,8 @@
 
 namespace duckdb {
 
+Radio &GetRadio();
+
 class RadioExtension : public Extension {
 public:
 	void Load(DuckDB &db) override;

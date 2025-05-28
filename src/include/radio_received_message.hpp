@@ -22,11 +22,11 @@ public:
 		return receive_time_;
 	}
 
-	uint64_t get_seen_count() const {
+	uint64_t seen_count() const {
 		return seen_count_.load();
 	}
 
-	uint64_t get_id() const {
+	uint64_t id() const {
 		return id_;
 	}
 

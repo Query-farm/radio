@@ -7,14 +7,11 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
-#include <deque>
-#include <vector>
-#include <iostream>
-#include <optional>
 
 #include "radio_received_message.hpp"
 #include "radio_received_message_queue.hpp"
 #include "radio_subscription.hpp"
+#include "radio_utils.hpp"
 #include "radio.hpp"
 
 namespace duckdb {
@@ -24,21 +21,15 @@ Radio &GetRadio() {
 	return instance;
 }
 
-uint64_t current_time_millis() {
-	return static_cast<uint64_t>(
-	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-	        .count());
-}
-
 inline void RadioTuneInFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &url_vector = args.data[0];
 
 	UnaryExecutor::Execute<string_t, uint64_t>(url_vector, result, args.size(), [&](string_t url) {
 		auto &radio = GetRadio();
 
-		auto creation_time = current_time_millis();
+		auto creation_time = RadioCurrentTimeMillis();
 		auto max_queued_messages = 10;
-		return radio.AddSubscription(url.GetString(), max_queued_messages, creation_time)->get_id();
+		return radio.AddSubscription(url.GetString(), max_queued_messages, creation_time)->id();
 	});
 }
 
@@ -51,9 +42,9 @@ inline void RadioTuneOutFunction(DataChunk &args, ExpressionState &state, Vector
 		if (!subscription) {
 			throw InvalidInputException("No subscription found for URL: " + url.GetString());
 		}
-		radio.RemoveSubscription(subscription->get_id());
+		radio.RemoveSubscription(subscription->id());
 
-		return subscription->get_id();
+		return subscription->id();
 	});
 }
 
@@ -114,7 +105,7 @@ void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, Data
 
 	auto &subscription = bind_data.subscriptions_[bind_data.rows_returned++];
 
-	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->get_id();
+	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
 
 	FlatVector::GetData<string_t>(output.data[1])[0] =
 	    StringVector::AddStringOrBlob(output.data[1], subscription->url());
@@ -237,7 +228,7 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 			}
 
 			output.SetCardinality(1);
-			FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->get_id();
+			FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
 			FlatVector::GetData<string_t>(output.data[1])[0] =
 			    StringVector::AddStringOrBlob(output.data[1], subscription->url());
 			FlatVector::GetData<uint64_t>(output.data[2])[0] = messages_pending;
@@ -287,6 +278,77 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 	output.SetCardinality(0);
 }
 
+struct RadioMessagesBindData : public TableFunctionData {
+	explicit RadioMessagesBindData(Radio &radio) {
+		for (auto &subscription : radio.GetSubscriptions()) {
+			// Add all messages for each subscription.
+			for (auto &message : subscription->snapshot_messages(RadioReceivedMessage::MESSAGE)) {
+				messages_.emplace_back(subscription, message);
+			}
+			for (auto &message : subscription->snapshot_messages(RadioReceivedMessage::ERROR)) {
+				messages_.emplace_back(subscription, message);
+			}
+		}
+	}
+
+	size_t current_row = 0;
+	vector<std::pair<std::shared_ptr<RadioSubscription>, std::shared_ptr<RadioReceivedMessage>>> messages_;
+};
+
+static unique_ptr<FunctionData> RadioMessagesBind(ClientContext &context, TableFunctionBindInput &input,
+                                                  vector<LogicalType> &return_types, vector<string> &names) {
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("subscription_id");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
+	names.emplace_back("subscription_url");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("message_id");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("receive_time");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("seen_count");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
+	names.emplace_back("message");
+
+	return make_uniq<RadioMessagesBindData>(GetRadio());
+}
+
+void RadioMessages(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	D_ASSERT(data_p.bind_data);
+	auto &bind_data = data_p.bind_data->CastNoConst<RadioMessagesBindData>();
+
+	if (bind_data.current_row >= bind_data.messages_.size()) {
+		// No more messages to return.
+		output.SetCardinality(0);
+		return;
+	}
+
+	// Return a row at a time for now.
+	auto &record = bind_data.messages_[bind_data.current_row++];
+	output.SetCardinality(1);
+
+	auto &subscription = record.first;
+	auto &message = record.second;
+
+	// From the subscription
+	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
+	FlatVector::GetData<string_t>(output.data[1])[0] =
+	    StringVector::AddStringOrBlob(output.data[1], subscription->url());
+
+	// From the message
+	FlatVector::GetData<uint64_t>(output.data[2])[0] = message->id();
+	FlatVector::GetData<uint64_t>(output.data[3])[0] = message->receive_time();
+	FlatVector::GetData<uint64_t>(output.data[4])[0] = message->seen_count();
+	FlatVector::GetData<string_t>(output.data[5])[0] =
+	    StringVector::AddStringOrBlob(output.data[5], message->message());
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 
 	// There are a few functions for the radio extension to process.
@@ -315,10 +377,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	//     ScalarFunction("turn_off", {LogicalType::VARCHAR}, LogicalType::SQLNULL, RadioTurnOffFunction);
 	// ExtensionUtil::RegisterFunction(instance, turn_off_function);
 
-	// // This is a table function, just returns true if there are messages.
-	// auto listen_function =
-	//     TableFunction("listen", {LogicalType::BOOLEAN, LogicalType::DOUBLE}, RadioListenFunction,
-	//     RadioListenBind);
+	// Add a message just like if it was received from a subscription.
 
 	auto listen_function =
 	    TableFunction("radio_listen", {LogicalType::BOOLEAN, LogicalType::DOUBLE}, RadioListen, RadioListenBind);
@@ -327,13 +386,10 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto subscriptions_function = TableFunction("radio_subscriptions", {}, RadioSubscriptions, RadioSubscriptionsBind);
 	ExtensionUtil::RegisterFunction(instance, subscriptions_function);
 
-	// Table returning functions
-	// incoming_messages
+	auto messages_function = TableFunction("radio_messages", {}, RadioMessages, RadioMessagesBind);
+	ExtensionUtil::RegisterFunction(instance, messages_function);
 
-	// auto messages_function = TableFunction("radio_messages", {}, RadioMessages, RadioMessagesBind);
-	// ExtensionUtil::RegisterFunction(instance, messages_function);
-
-	// There is a table to get the actual messages in the catalog.
+	RadioSubscriptionAddFunctions(instance);
 }
 
 void RadioExtension::Load(DuckDB &db) {

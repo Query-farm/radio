@@ -15,7 +15,9 @@ project(${TARGET_NAME})
 include_directories(src/include)
 
 set(EXTENSION_SOURCES src/radio_extension.cpp
-src/radio.cpp)
+src/radio.cpp
+src/radio_subscription.cpp
+src/radio_utils.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})

@@ -32,7 +32,11 @@ public:
 		get_queue_for_type(type).resize(max_queued_messages);
 	}
 
-	uint64_t get_id() const {
+	std::vector<std::shared_ptr<RadioReceivedMessage>> snapshot_messages(RadioReceivedMessage::MessageType type) {
+		return get_queue_for_type(type).snapshot();
+	}
+
+	uint64_t id() const {
 		// Return the id of the subscription
 		return id_;
 	}
@@ -74,12 +78,16 @@ public:
 	}
 
 	// This could be called by another thread.
-	void add(RadioReceivedMessage::MessageType type, vector<std::pair<std::string, uint64_t>> messages) {
+	void add_messages(RadioReceivedMessage::MessageType type, vector<std::pair<std::string, uint64_t>> messages,
+	                  uint64_t *message_ids) {
 		std::vector<std::shared_ptr<RadioReceivedMessage>> items;
 
-		for (const auto &message : messages) {
-			auto entry = std::make_shared<RadioReceivedMessage>(message_counter_.fetch_add(std::memory_order_relaxed),
-			                                                    message.first, message.second);
+		for (size_t i = 0; i < messages.size(); i++) {
+			auto message_id = message_counter_.fetch_add(1, std::memory_order_relaxed);
+			if (message_ids) {
+				message_ids[i] = message_id;
+			}
+			auto entry = std::make_shared<RadioReceivedMessage>(message_id, messages[i].first, messages[i].second);
 			items.push_back(entry);
 		}
 		get_queue_for_type(type).push(items);
@@ -119,4 +127,7 @@ private:
 
 	Radio &radio_;
 };
+
+void RadioSubscriptionAddFunctions(DatabaseInstance &instance);
+
 } // namespace duckdb

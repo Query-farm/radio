@@ -36,7 +36,7 @@ std::shared_ptr<RadioSubscription> Radio::AddSubscription(const std::string &url
 void Radio::RemoveSubscription(std::shared_ptr<RadioSubscription> subscription) {
 	std::lock_guard<std::mutex> lock(mtx);
 
-	auto it = subscriptions_.find(subscription->get_id());
+	auto it = subscriptions_.find(subscription->id());
 	if (it != subscriptions_.end()) {
 		auto removed = std::move(it->second);
 		subscriptions_.erase(it);
