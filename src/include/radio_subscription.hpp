@@ -46,6 +46,10 @@ public:
 		return get_queue_for_type(type).snapshot();
 	}
 
+	std::vector<std::shared_ptr<RadioTransmitMessage>> transmit_snapshot() {
+		return transmit_messages_.snapshot();
+	}
+
 	uint64_t id() const {
 		// Return the id of the subscription
 		return id_;
@@ -88,8 +92,8 @@ public:
 	}
 
 	// This could be called by another thread.
-	void add_messages(RadioReceivedMessage::MessageType type, vector<std::pair<std::string, uint64_t>> messages,
-	                  uint64_t *message_ids) {
+	void add_received_messages(RadioReceivedMessage::MessageType type,
+	                           std::vector<std::pair<std::string, uint64_t>> messages, uint64_t *message_ids) {
 		std::vector<std::shared_ptr<RadioReceivedMessage>> items;
 
 		for (size_t i = 0; i < messages.size(); i++) {
@@ -103,6 +107,23 @@ public:
 		get_queue_for_type(type).push(items);
 
 		radio_.NotifyHasMessages();
+	}
+
+	void add_transmit_messages(std::vector<RadioTransmitMessageParts> messages, uint64_t *message_ids) {
+		std::vector<std::shared_ptr<RadioTransmitMessage>> items;
+
+		auto current_time = RadioCurrentTimeMillis();
+		for (size_t i = 0; i < messages.size(); i++) {
+			auto message_id = message_counter_.fetch_add(1, std::memory_order_relaxed);
+			if (message_ids) {
+				message_ids[i] = message_id;
+			}
+			auto entry =
+			    std::make_shared<RadioTransmitMessage>(this->transmit_messages_, message_id, messages[i].message,
+			                                           current_time, messages[i].max_attempts, messages[i].expire_time);
+			items.emplace_back(std::move(entry));
+		}
+		transmit_messages_.push(items, current_time);
 	}
 
 private:
