@@ -1,8 +1,8 @@
-select radio_tune_in('http://example.com/stream');
+CALL radio_subscribe('http://example.com/stream', 10::uinteger);
 
-select radio_tune_in('http://example.com/stream2');
+CALL radio_subscribe('http://example.com/stream2', 10::uinteger);
 
-select radio_tune_out('http://example.com/stream');
+CALL radio_unsubscribe('http://example.com/stream');
 
 
 select * from radio_subscriptions();

@@ -21,19 +21,100 @@ Radio &GetRadio() {
 	return instance;
 }
 
-inline void RadioTuneInFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &url_vector = args.data[0];
+struct RadioSubscribeBindData : public TableFunctionData {
+	explicit RadioSubscribeBindData(Radio &radio, const string &url, uint32_t max_queued_messages,
+	                                uint64_t creation_time)
+	    : radio_(radio), url_(url), max_queued_messages_(max_queued_messages), creation_time_(creation_time) {
+	}
 
-	UnaryExecutor::Execute<string_t, uint64_t>(url_vector, result, args.size(), [&](string_t url) {
-		auto &radio = GetRadio();
+	Radio &radio_;
+	string url_;
+	uint32_t max_queued_messages_;
+	uint64_t creation_time_;
 
-		auto creation_time = RadioCurrentTimeMillis();
-		auto max_queued_messages = 10;
-		return radio.AddSubscription(url.GetString(), max_queued_messages, creation_time)->id();
-	});
+	bool did_subscribe = false;
+	vector<std::pair<std::shared_ptr<RadioSubscription>, std::shared_ptr<RadioReceivedMessage>>> messages_;
+};
+
+static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, TableFunctionBindInput &input,
+                                                   vector<LogicalType> &return_types, vector<string> &names) {
+
+	auto url = input.inputs[0].GetValue<string>();
+	auto max_queued_messages = input.inputs[1].GetValue<uint32_t>();
+	auto creation_time = RadioCurrentTimeMillis();
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("subscription_id");
+
+	return make_uniq<RadioSubscribeBindData>(GetRadio(), url, max_queued_messages, creation_time);
 }
 
-inline void RadioTuneOutFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+void RadioSubscribe(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	D_ASSERT(data_p.bind_data);
+	auto &bind_data = data_p.bind_data->CastNoConst<RadioSubscribeBindData>();
+
+	if (bind_data.did_subscribe) {
+		// No more messages to return.
+		output.SetCardinality(0);
+		return;
+	}
+
+	// Return a row at a time for now.
+	bind_data.did_subscribe = true;
+	output.SetCardinality(1);
+
+	auto subscription =
+	    bind_data.radio_.AddSubscription(bind_data.url_, bind_data.max_queued_messages_, bind_data.creation_time_);
+
+	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
+}
+
+struct RadioUnsubscribeBindData : public TableFunctionData {
+	explicit RadioUnsubscribeBindData(Radio &radio, const string &url) : radio_(radio), url_(url) {
+	}
+
+	Radio &radio_;
+	string url_;
+
+	bool did_unsubscribe = false;
+	vector<std::pair<std::shared_ptr<RadioSubscription>, std::shared_ptr<RadioReceivedMessage>>> messages_;
+};
+
+static unique_ptr<FunctionData> RadioUnsubscribeBind(ClientContext &context, TableFunctionBindInput &input,
+                                                     vector<LogicalType> &return_types, vector<string> &names) {
+
+	auto url = input.inputs[0].GetValue<string>();
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("subscription_id");
+
+	return make_uniq<RadioUnsubscribeBindData>(GetRadio(), url);
+}
+
+void RadioUnsubscribe(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	D_ASSERT(data_p.bind_data);
+	auto &bind_data = data_p.bind_data->CastNoConst<RadioUnsubscribeBindData>();
+
+	if (bind_data.did_unsubscribe) {
+		// No more messages to return.
+		output.SetCardinality(0);
+		return;
+	}
+
+	// Return a row at a time for now.
+	bind_data.did_unsubscribe = true;
+	output.SetCardinality(1);
+
+	auto subscription = bind_data.radio_.GetSubscription(bind_data.url_);
+	if (!subscription) {
+		throw InvalidInputException("No subscription found for URL: " + bind_data.url_);
+	}
+	bind_data.radio_.RemoveSubscription(subscription->id());
+
+	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
+}
+
+inline void RadioUnsubscribeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &url_vector = args.data[0];
 
 	UnaryExecutor::Execute<string_t, uint64_t>(url_vector, result, args.size(), [&](string_t url) {
@@ -129,7 +210,7 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 
 	// id
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
-	names.emplace_back("id");
+	names.emplace_back("subscription_id");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
 	names.emplace_back("url");
@@ -354,15 +435,14 @@ static void LoadInternal(DatabaseInstance &instance) {
 	// There are a few functions for the radio extension to process.
 
 	// This should take an optional parameter for max number of messages.
-	auto tune_in_function =
-	    ScalarFunction("radio_tune_in", {LogicalType::VARCHAR}, LogicalType::UBIGINT, RadioTuneInFunction);
-	ExtensionUtil::RegisterFunction(instance, tune_in_function);
 
-	// tune_in_function.named_parameters["max_queued_messages"] = LogicalType::UINTEGER;
+	auto subscribe_function = TableFunction("radio_subscribe", {LogicalType::VARCHAR, LogicalType::UINTEGER},
+	                                        RadioSubscribe, RadioSubscribeBind);
+	ExtensionUtil::RegisterFunction(instance, subscribe_function);
 
-	auto tune_out_function =
-	    ScalarFunction("radio_tune_out", {LogicalType::VARCHAR}, LogicalType::UBIGINT, RadioTuneOutFunction);
-	ExtensionUtil::RegisterFunction(instance, tune_out_function);
+	auto unsubscribe_function =
+	    TableFunction("radio_unsubscribe", {LogicalType::VARCHAR}, RadioUnsubscribe, RadioUnsubscribeBind);
+	ExtensionUtil::RegisterFunction(instance, unsubscribe_function);
 
 	// auto transmit_function = ScalarFunction("transmit", {LogicalType::VARCHAR, LogicalType::BLOB},
 	// LogicalType::BOOLEAN,
