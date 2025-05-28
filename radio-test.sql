@@ -32,4 +32,6 @@ select * from radio_subscription_transmit_messages('http://example.com/stream2')
 
 CALL radio_subscription_transmit_message_add('http://example.com/stream2', 'test message'::blob, 10::uinteger, interval '1 minute');
 
-select * from radio_subscription_transmit_messages('http://example.com/stream2');
+select message_id, message, receive_time from radio_subscription_transmit_messages('http://example.com/stream2')
+order by receive_time;
+

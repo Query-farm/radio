@@ -1,4 +1,3 @@
-
 #include "radio_extension.hpp"
 #include "radio_subscription.hpp"
 #include "duckdb.hpp"

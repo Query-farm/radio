@@ -5,6 +5,7 @@
 #include "radio_transmit_message.hpp"
 #include "radio_transmit_message_queue.hpp"
 #include "radio.hpp"
+#include <IXWebSocket.h>
 
 namespace duckdb {
 
@@ -30,12 +31,40 @@ private:
 		}
 	}
 
+	ix::WebSocket webSocket;
+
 public:
 	explicit RadioSubscription(const uint64_t id, const std::string &url, uint32_t receive_queue_size,
 	                           uint32_t transmit_queue_size, uint64_t creation_time, Radio &radio)
 	    : id_(id), url_(std::move(url)), creation_time_(creation_time), disabled_(false),
 	      received_messages_(receive_queue_size), received_errors_(receive_queue_size),
 	      transmit_messages_(transmit_queue_size), radio_(radio) {
+		webSocket.setUrl(url_);
+		webSocket.setOnMessageCallback([this](const ix::WebSocketMessagePtr &msg) {
+			if (msg->type == ix::WebSocketMessageType::Message) {
+				//				printf("Received message: %s\n", msg->str.c_str());
+				this->add_received_messages(RadioReceivedMessage::MessageType::MESSAGE,
+				                            {{msg->str, RadioCurrentTimeMillis()}});
+			} else if (msg->type == ix::WebSocketMessageType::Open) {
+				//				printf("WebSocket connection opened\n");
+				this->is_connected_ = true;
+			} else if (msg->type == ix::WebSocketMessageType::Close) {
+				//				printf("WebSocket connection closed\n");
+				this->is_connected_ = false;
+			} else if (msg->type == ix::WebSocketMessageType::Error) {
+				//				printf("WebSocket error: %s\n", msg->errorInfo.reason.c_str());
+				this->add_received_messages(RadioReceivedMessage::MessageType::ERROR,
+				                            {{msg->errorInfo.reason, RadioCurrentTimeMillis()}});
+			}
+		});
+
+		// FIXME: need a way to handle transmit messages in a seperate thread.
+
+		webSocket.start();
+	}
+
+	~RadioSubscription() {
+		webSocket.stop();
 	}
 
 	void set_receive_queue_size(RadioReceivedMessage::MessageType type, uint32_t capacity) {
@@ -93,7 +122,8 @@ public:
 
 	// This could be called by another thread.
 	void add_received_messages(RadioReceivedMessage::MessageType type,
-	                           std::vector<std::pair<std::string, uint64_t>> messages, uint64_t *message_ids) {
+	                           std::vector<std::pair<std::string, uint64_t>> messages,
+	                           uint64_t *message_ids = nullptr) {
 		std::vector<std::shared_ptr<RadioReceivedMessage>> items;
 
 		for (size_t i = 0; i < messages.size(); i++) {
@@ -149,6 +179,8 @@ private:
 
 	// Indicate if this subscription should be disabled.
 	bool disabled_ = false;
+
+	bool is_connected_ = false;
 
 	// Keep a queue of messages here, so its easier to manage rather than a shared queue.
 	RadioReceivedMessageQueue received_messages_ {10};

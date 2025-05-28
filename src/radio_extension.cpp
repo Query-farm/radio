@@ -276,6 +276,48 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 	return make_uniq<RadioSubscriptionsBindData>(GetRadio());
 }
 
+struct RadioSleepBindData : public TableFunctionData {
+public:
+	RadioSleepBindData(double duration_ms) : duration(duration_ms) {
+	}
+
+	bool did_sleep = false;
+	double duration = 0.0;
+};
+
+static unique_ptr<FunctionData> RadioSleepBind(ClientContext &context, TableFunctionBindInput &input,
+                                               vector<LogicalType> &return_types, vector<string> &names) {
+	if (input.inputs.size() != 1) {
+		throw BinderException("radio_sleep requires one argument");
+	}
+
+	auto duration = input.inputs[0].GetValue<interval_t>();
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
+	names.emplace_back("finished");
+
+	return make_uniq<RadioSleepBindData>(Interval::GetMilli(duration));
+}
+
+void RadioSleep(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	D_ASSERT(data_p.bind_data);
+	auto &bind_data = data_p.bind_data->CastNoConst<RadioSleepBindData>();
+
+	if (bind_data.did_sleep) {
+		// No more messages to return.
+		output.SetCardinality(0);
+		return;
+	}
+
+	// Return a row at a time for now.
+	bind_data.did_sleep = true;
+	output.SetCardinality(1);
+	FlatVector::GetData<bool>(output.data[0])[0] = true;
+
+	// Sleep for the specified duration
+	std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int64_t>(bind_data.duration)));
+}
+
 struct RadioListenBindData : public TableFunctionData {
 public:
 	RadioListenBindData(Radio &radio, bool wait_for_messages, double wait_timeout = 0.0)
@@ -305,7 +347,6 @@ public:
 
 static unique_ptr<FunctionData> RadioListenBind(ClientContext &context, TableFunctionBindInput &input,
                                                 vector<LogicalType> &return_types, vector<string> &names) {
-
 	if (input.inputs.size() < 2) {
 		throw BinderException("radio_listen requires at least 2 arguments");
 	}
@@ -413,7 +454,6 @@ struct RadioReceivedMessagesBindData : public TableFunctionData {
 
 static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context, TableFunctionBindInput &input,
                                                           vector<LogicalType> &return_types, vector<string> &names) {
-
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
 
@@ -466,7 +506,6 @@ void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, D
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
-
 	// There are a few functions for the radio extension to process.
 
 	// This should take an optional parameter for max number of messages.
@@ -500,6 +539,9 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto received_messages_function =
 	    TableFunction("radio_received_messages", {}, RadioReceivedMessages, RadioReceivedMessagesBind);
 	ExtensionUtil::RegisterFunction(instance, received_messages_function);
+
+	auto sleep_function = TableFunction("radio_sleep", {LogicalType::INTERVAL}, RadioSleep, RadioSleepBind);
+	ExtensionUtil::RegisterFunction(instance, sleep_function);
 
 	RadioSubscriptionAddFunctions(instance);
 }
