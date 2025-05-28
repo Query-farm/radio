@@ -109,7 +109,7 @@ static unique_ptr<FunctionData> RadioSubscriptionMessagesBind(ClientContext &con
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("receive_time");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));

@@ -192,12 +192,12 @@ void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, Data
 	    StringVector::AddStringOrBlob(output.data[1], subscription->url());
 
 	FlatVector::GetData<uint64_t>(output.data[2])[0] = subscription->creation_time();
-	FlatVector::GetData<uint64_t>(output.data[3])[0] = subscription->activation_time();
+
+	STORE_NULLABLE_TIMESTAMP(output.data[3], subscription->activation_time());
 	FlatVector::GetData<bool>(output.data[4])[0] = subscription->disabled() ? 1 : 0;
-	FlatVector::GetData<uint64_t>(output.data[5])[0] =
-	    subscription->get_latest_receive_time(RadioReceivedMessage::ERROR);
-	FlatVector::GetData<uint64_t>(output.data[6])[0] =
-	    subscription->get_latest_receive_time(RadioReceivedMessage::MESSAGE);
+
+	STORE_NULLABLE_TIMESTAMP(output.data[5], subscription->get_latest_receive_time(RadioReceivedMessage::ERROR));
+	STORE_NULLABLE_TIMESTAMP(output.data[6], subscription->get_latest_receive_time(RadioReceivedMessage::MESSAGE));
 
 	FlatVector::GetData<uint64_t>(output.data[7])[0] = subscription->message_odometer(RadioReceivedMessage::ERROR);
 	FlatVector::GetData<uint64_t>(output.data[8])[0] = subscription->message_odometer(RadioReceivedMessage::MESSAGE);
@@ -215,10 +215,10 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
 	names.emplace_back("url");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("creation_time");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("activation_time");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
@@ -226,10 +226,10 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 
 	// Ideally we'd have a struct since we have repeated fields per queue.
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("last_error_time");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("last_message_time");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
@@ -388,7 +388,7 @@ static unique_ptr<FunctionData> RadioMessagesBind(ClientContext &context, TableF
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("receive_time");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
