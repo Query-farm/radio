@@ -40,7 +40,10 @@ static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, Table
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 
 	auto url = input.inputs[0].GetValue<string>();
-	auto max_queued_messages = input.inputs[1].GetValue<uint32_t>();
+	auto max_queued_messages = input.inputs[1].GetValue<int32_t>();
+	if (max_queued_messages < 0) {
+		throw BinderException("radio_subscribe requires the second argument to be a non-negative integer");
+	}
 	auto creation_time = RadioCurrentTimeMillis();
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
@@ -320,9 +323,9 @@ void RadioSleep(ClientContext &context, TableFunctionInput &data_p, DataChunk &o
 
 struct RadioListenBindData : public TableFunctionData {
 public:
-	RadioListenBindData(Radio &radio, bool wait_for_messages, double wait_timeout = 0.0)
-	    : wait_for_messages(wait_for_messages), wait_timeout(wait_timeout), returned_any_rows(false), radio(radio),
-	      last_loop_after_waiting(false) {
+	RadioListenBindData(Radio &radio, bool wait_for_messages, int64_t wait_timeout_ms)
+	    : wait_for_messages(wait_for_messages), wait_timeout_ms(wait_timeout_ms), returned_any_rows(false),
+	      radio(radio), last_loop_after_waiting(false) {
 		// Copy all subscriptions so we don't have to worry about changes
 		// while scanning.
 		subscriptions_ = radio.GetSubscriptions();
@@ -332,7 +335,7 @@ public:
 
 	bool wait_for_messages;
 
-	double wait_timeout = 0.0;
+	const int64_t wait_timeout_ms = 0;
 
 	bool returned_any_rows;
 
@@ -352,14 +355,18 @@ static unique_ptr<FunctionData> RadioListenBind(ClientContext &context, TableFun
 	}
 
 	auto wait_for_messages = input.inputs[0].GetValue<bool>();
-	auto duration = input.inputs[1].GetValue<double>();
+	auto duration = input.inputs[1].GetValue<interval_t>();
 
-	// id
+	auto duration_milliseconds = Interval::GetMilli(duration);
+	if (duration_milliseconds < 0) {
+		throw BinderException("radio_listen requires the second argument to be a non-negative interval");
+	}
+
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
-	names.emplace_back("id");
+	names.emplace_back("subscription_id");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
-	names.emplace_back("url");
+	names.emplace_back("subscription_url");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("messages_pending");
@@ -367,7 +374,7 @@ static unique_ptr<FunctionData> RadioListenBind(ClientContext &context, TableFun
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("errors_pending");
 
-	return make_uniq<RadioListenBindData>(GetRadio(), wait_for_messages, duration);
+	return make_uniq<RadioListenBindData>(GetRadio(), wait_for_messages, duration_milliseconds);
 }
 
 void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -416,8 +423,7 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 	// that we didn't find anything.
 	if (!bind_data.returned_any_rows && !bind_data.last_loop_after_waiting) {
 		// Wait for messages with timeout
-		if (!bind_data.radio.WaitForMessages(
-		        std::chrono::milliseconds(static_cast<int64_t>(bind_data.wait_timeout * 1000.0)))) {
+		if (!bind_data.radio.WaitForMessages(std::chrono::milliseconds(bind_data.wait_timeout_ms))) {
 			// No messages found during the timeout, so no rows returned
 			// and no need to call again.
 			output.SetCardinality(0);
@@ -510,7 +516,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 
 	// This should take an optional parameter for max number of messages.
 
-	auto subscribe_function = TableFunction("radio_subscribe", {LogicalType::VARCHAR, LogicalType::UINTEGER},
+	auto subscribe_function = TableFunction("radio_subscribe", {LogicalType::VARCHAR, LogicalType::INTEGER},
 	                                        RadioSubscribe, RadioSubscribeBind);
 	ExtensionUtil::RegisterFunction(instance, subscribe_function);
 
@@ -530,7 +536,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	// Add a message just like if it was received from a subscription.
 
 	auto listen_function =
-	    TableFunction("radio_listen", {LogicalType::BOOLEAN, LogicalType::DOUBLE}, RadioListen, RadioListenBind);
+	    TableFunction("radio_listen", {LogicalType::BOOLEAN, LogicalType::INTERVAL}, RadioListen, RadioListenBind);
 	ExtensionUtil::RegisterFunction(instance, listen_function);
 
 	auto subscriptions_function = TableFunction("radio_subscriptions", {}, RadioSubscriptions, RadioSubscriptionsBind);

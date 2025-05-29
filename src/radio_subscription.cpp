@@ -235,9 +235,9 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 	    StringVector::AddStringOrBlob(output.data[7], message->message());
 }
 
-struct RadioSubscriptionTransmitMessageAddBindData : public TableFunctionData {
-	explicit RadioSubscriptionTransmitMessageAddBindData(Radio &radio, const string &url, const string &message,
-	                                                     const uint32_t max_attempts, const int64_t expire_time)
+struct RadioTransmitMessageAddBindData : public TableFunctionData {
+	explicit RadioTransmitMessageAddBindData(Radio &radio, const string &url, const string &message,
+	                                         const uint32_t max_attempts, const int64_t expire_time)
 	    : radio_(radio), url_(url), message_(message), max_attempts_(max_attempts), expire_time_(expire_time) {
 	}
 
@@ -251,18 +251,19 @@ struct RadioSubscriptionTransmitMessageAddBindData : public TableFunctionData {
 	bool did_add = false;
 };
 
-static unique_ptr<FunctionData> RadioSubscriptionTransmitMessageAddBind(ClientContext &context,
-                                                                        TableFunctionBindInput &input,
-                                                                        vector<LogicalType> &return_types,
-                                                                        vector<string> &names) {
+static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &context, TableFunctionBindInput &input,
+                                                            vector<LogicalType> &return_types, vector<string> &names) {
 
 	if (input.inputs.size() != 4) {
-		throw BinderException("radio_subscription_transmit_message_add requires 4 arguments");
+		throw BinderException("radio_transmit_message requires 4 arguments");
 	}
 
 	auto url = input.inputs[0].GetValue<string>();
 	auto message = input.inputs[1].GetValue<string>();
-	auto max_attempts = input.inputs[2].GetValue<uint32_t>();
+	auto max_attempts = input.inputs[2].GetValue<int32_t>();
+	if (max_attempts <= 0) {
+		throw InvalidInputException("max_attempts must be a positive integer");
+	}
 	auto expire_time = input.inputs[3].GetValue<interval_t>();
 
 	auto current_time = RadioCurrentTimeMillis();
@@ -271,13 +272,12 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessageAddBind(ClientCo
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
-	return make_uniq<RadioSubscriptionTransmitMessageAddBindData>(GetRadio(), url, message, max_attempts,
-	                                                              real_expire_time);
+	return make_uniq<RadioTransmitMessageAddBindData>(GetRadio(), url, message, max_attempts, real_expire_time);
 }
 
-void RadioSubscriptionTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioSubscriptionTransmitMessageAddBindData>();
+	auto &bind_data = data_p.bind_data->CastNoConst<RadioTransmitMessageAddBindData>();
 
 	if (bind_data.did_add) {
 		// If we already added the message, just return no rows.
@@ -322,9 +322,9 @@ void RadioSubscriptionAddFunctions(DatabaseInstance &instance) {
 	ExtensionUtil::RegisterFunction(instance, transmit_messages_function);
 
 	auto transmit_message_add_function =
-	    TableFunction("radio_subscription_transmit_message_add",
-	                  {LogicalType::VARCHAR, LogicalType::BLOB, LogicalType::UINTEGER, LogicalType::INTERVAL},
-	                  RadioSubscriptionTransmitMessageAdd, RadioSubscriptionTransmitMessageAddBind);
+	    TableFunction("radio_transmit_message",
+	                  {LogicalType::VARCHAR, LogicalType::BLOB, LogicalType::INTEGER, LogicalType::INTERVAL},
+	                  RadioTransmitMessageAdd, RadioTransmitMessageAddBind);
 	ExtensionUtil::RegisterFunction(instance, transmit_message_add_function);
 }
 
