@@ -5,6 +5,7 @@
 #include "radio_transmit_message.hpp"
 #include "radio_transmit_message_queue.hpp"
 #include "radio.hpp"
+#include "radio_subscription_parameters.hpp"
 #include <IXWebSocket.h>
 
 namespace duckdb {
@@ -34,11 +35,13 @@ private:
 	ix::WebSocket webSocket;
 
 public:
-	explicit RadioSubscription(const uint64_t id, const std::string &url, uint32_t receive_queue_size,
-	                           uint32_t transmit_queue_size, uint64_t creation_time, Radio &radio)
+	explicit RadioSubscription(const uint64_t id, const std::string &url, const RadioSubscriptionParameters &params,
+	                           uint64_t creation_time, Radio &radio)
 	    : id_(id), url_(std::move(url)), creation_time_(creation_time), disabled_(false),
-	      received_messages_(receive_queue_size), received_errors_(receive_queue_size),
-	      transmit_messages_(transmit_queue_size), radio_(radio) {
+	      received_messages_(params.receive_message_capacity), received_errors_(params.receive_error_capacity),
+	      transmit_messages_(params.transmit_message_capacity, params.transmit_retry_initial_delay_ms,
+	                         params.transmit_retry_multiplier, params.transmit_retry_max_delay_ms),
+	      radio_(radio) {
 		webSocket.setUrl(url_);
 		webSocket.setOnMessageCallback([this](const ix::WebSocketMessagePtr &msg) {
 			if (msg->type == ix::WebSocketMessageType::Message) {
@@ -182,12 +185,12 @@ private:
 	bool disabled_ = false;
 
 	// Keep a queue of messages here, so its easier to manage rather than a shared queue.
-	RadioReceivedMessageQueue received_messages_ {10};
+	RadioReceivedMessageQueue received_messages_;
 
 	// Store the latest error message.
-	RadioReceivedMessageQueue received_errors_ {10};
+	RadioReceivedMessageQueue received_errors_;
 
-	RadioTransmitMessageQueue transmit_messages_ {10};
+	RadioTransmitMessageQueue transmit_messages_;
 
 	Radio &radio_;
 };

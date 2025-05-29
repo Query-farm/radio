@@ -15,7 +15,8 @@ const std::vector<std::shared_ptr<RadioSubscription>> Radio::GetSubscriptions() 
 }
 
 // Add a new subscription to the list.
-std::shared_ptr<RadioSubscription> Radio::AddSubscription(const std::string &url, const uint32_t max_queued_messages,
+std::shared_ptr<RadioSubscription> Radio::AddSubscription(const std::string &url,
+                                                          const RadioSubscriptionParameters &params,
                                                           const uint64_t creation_time) {
 	// Check to see if we're already subscribed to this url.
 	std::lock_guard<std::mutex> lock(mtx);
@@ -27,8 +28,7 @@ std::shared_ptr<RadioSubscription> Radio::AddSubscription(const std::string &url
 		return it->second;
 	}
 	auto new_id = subscription_id_++;
-	subscriptions_[new_id] = std::make_shared<RadioSubscription>(new_id, url, max_queued_messages, max_queued_messages,
-	                                                             creation_time, *this);
+	subscriptions_[new_id] = std::make_shared<RadioSubscription>(new_id, url, params, creation_time, *this);
 	return subscriptions_[new_id];
 }
 

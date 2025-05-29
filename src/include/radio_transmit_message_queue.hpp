@@ -25,7 +25,10 @@ struct RadioTransmitMessageQueueState {
 
 class RadioTransmitMessageQueue {
 public:
-	RadioTransmitMessageQueue(size_t capacity) : capacity_(capacity) {
+	RadioTransmitMessageQueue(const size_t capacity, const int32_t retry_initial_delay_ms,
+	                          const double retry_multiplier, const int32_t retry_max_delay_ms)
+	    : capacity_(capacity), retry_initial_delay_ms_(retry_initial_delay_ms), retry_multiplier_(retry_multiplier),
+	      retry_max_delay_ms_(retry_max_delay_ms) {
 	}
 
 	void push(const std::vector<std::shared_ptr<RadioTransmitMessage>> &items, const uint64_t current_time);
@@ -53,6 +56,10 @@ public:
 
 private:
 	uint64_t capacity_;
+
+	int32_t retry_initial_delay_ms_;
+	double retry_multiplier_;
+	int32_t retry_max_delay_ms_;
 
 	std::deque<std::shared_ptr<RadioTransmitMessage>> queue_;
 

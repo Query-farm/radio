@@ -22,15 +22,15 @@ Radio &GetRadio() {
 }
 
 struct RadioSubscribeBindData : public TableFunctionData {
-	explicit RadioSubscribeBindData(Radio &radio, const string &url, uint32_t max_queued_messages,
+	explicit RadioSubscribeBindData(Radio &radio, const string &url, RadioSubscriptionParameters &params,
 	                                uint64_t creation_time)
-	    : radio_(radio), url_(url), max_queued_messages_(max_queued_messages), creation_time_(creation_time) {
+	    : radio_(radio), url_(url), creation_time_(creation_time), params_(params) {
 	}
 
 	Radio &radio_;
 	string url_;
-	uint32_t max_queued_messages_;
 	uint64_t creation_time_;
+	RadioSubscriptionParameters params_;
 
 	bool did_subscribe = false;
 	vector<std::pair<std::shared_ptr<RadioSubscription>, std::shared_ptr<RadioReceivedMessage>>> messages_;
@@ -40,16 +40,53 @@ static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, Table
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 
 	auto url = input.inputs[0].GetValue<string>();
-	auto max_queued_messages = input.inputs[1].GetValue<int32_t>();
-	if (max_queued_messages < 0) {
-		throw BinderException("radio_subscribe requires the second argument to be a non-negative integer");
+
+	// FIXME: deal with the named parameters and the default values.
+	RadioSubscriptionParameters params;
+
+	for (auto &kv : input.named_parameters) {
+		auto loption = StringUtil::Lower(kv.first);
+		if (loption == "receive_message_capacity") {
+			params.receive_message_capacity = kv.second.GetValue<int32_t>();
+			if (params.receive_message_capacity <= 0) {
+				throw BinderException("radio_subscribe requires receive_message_capacity to be greater than 0");
+			}
+		} else if (loption == "receive_error_capacity") {
+			params.receive_error_capacity = kv.second.GetValue<int32_t>();
+			if (params.receive_error_capacity <= 0) {
+				throw BinderException("radio_subscribe requires receive_error_capacity to be greater than 0");
+			}
+		} else if (loption == "transmit_message_capacity") {
+			params.transmit_message_capacity = kv.second.GetValue<int32_t>();
+			if (params.transmit_message_capacity <= 0) {
+				throw BinderException("radio_subscribe requires transmit_message_capacity to be greater than 0");
+			}
+		} else if (loption == "transmit_retry_initial_delay_ms") {
+			params.transmit_retry_initial_delay_ms = kv.second.GetValue<int32_t>();
+			if (params.transmit_retry_initial_delay_ms <= 0) {
+				throw BinderException("radio_subscribe requires transmit_retry_initial_delay_ms to be non-negative");
+			}
+		} else if (loption == "transmit_retry_multiplier") {
+			params.transmit_retry_multiplier = kv.second.GetValue<double>();
+			if (params.transmit_retry_multiplier <= 1.0) {
+				throw BinderException("radio_subscribe requires transmit_retry_multiplier to be greater than 1.0");
+			}
+		} else if (loption == "transmit_retry_max_delay_ms") {
+			params.transmit_retry_max_delay_ms = kv.second.GetValue<int32_t>();
+			if (params.transmit_retry_max_delay_ms <= 0) {
+				throw BinderException("radio_subscribe requires transmit_retry_max_delay_ms to be greater than 0");
+			}
+		} else {
+			throw BinderException("Unknown named parameter for radio_subscribe: " + kv.first);
+		}
 	}
+
 	auto creation_time = RadioCurrentTimeMillis();
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
 
-	return make_uniq<RadioSubscribeBindData>(GetRadio(), url, max_queued_messages, creation_time);
+	return make_uniq<RadioSubscribeBindData>(GetRadio(), url, params, creation_time);
 }
 
 void RadioSubscribe(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -66,8 +103,7 @@ void RadioSubscribe(ClientContext &context, TableFunctionInput &data_p, DataChun
 	bind_data.did_subscribe = true;
 	output.SetCardinality(1);
 
-	auto subscription =
-	    bind_data.radio_.AddSubscription(bind_data.url_, bind_data.max_queued_messages_, bind_data.creation_time_);
+	auto subscription = bind_data.radio_.AddSubscription(bind_data.url_, bind_data.params_, bind_data.creation_time_);
 
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
 }
@@ -516,8 +552,16 @@ static void LoadInternal(DatabaseInstance &instance) {
 
 	// This should take an optional parameter for max number of messages.
 
-	auto subscribe_function = TableFunction("radio_subscribe", {LogicalType::VARCHAR, LogicalType::INTEGER},
-	                                        RadioSubscribe, RadioSubscribeBind);
+	auto subscribe_function =
+	    TableFunction("radio_subscribe", {LogicalType::VARCHAR}, RadioSubscribe, RadioSubscribeBind);
+	subscribe_function.named_parameters["receive_message_capacity"] = LogicalType::INTEGER;
+	subscribe_function.named_parameters["receive_error_capacity"] = LogicalType::INTEGER;
+	subscribe_function.named_parameters["transmit_message_capacity"] = LogicalType::INTEGER;
+
+	subscribe_function.named_parameters["transmit_retry_initial_delay_ms"] = LogicalType::INTEGER;
+	subscribe_function.named_parameters["transmit_retry_multiplier"] = LogicalType::DOUBLE;
+	subscribe_function.named_parameters["transmit_retry_max_delay_ms"] = LogicalType::INTEGER;
+
 	ExtensionUtil::RegisterFunction(instance, subscribe_function);
 
 	auto unsubscribe_function =
