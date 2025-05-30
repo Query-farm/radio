@@ -21,6 +21,12 @@ void RadioTransmitMessageQueue::push(const std::vector<std::shared_ptr<RadioTran
 	}
 }
 
+int32_t RadioTransmitMessageQueue::retry_delay_time_ms(const RadioTransmitMessage &message) const {
+	auto delay = static_cast<int32_t>(retry_initial_delay_ms_ * std::pow(retry_multiplier_, message.state().try_count));
+	delay = std::min(delay, retry_max_delay_ms_);
+	return delay;
+}
+
 std::shared_ptr<RadioTransmitMessage> RadioTransmitMessageQueue::pop(uint64_t current_time) {
 	std::lock_guard<std::mutex> lock(mtx);
 	if (queue_.empty()) {
@@ -104,4 +110,4 @@ RadioTransmitMessageQueueState RadioTransmitMessageQueue::state() const {
 	return state_;
 }
 
-}
+} // namespace duckdb

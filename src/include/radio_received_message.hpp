@@ -3,15 +3,22 @@
 
 namespace duckdb {
 
+class RadioSubscription;
+
 class RadioReceivedMessage {
 public:
 	enum MessageType { MESSAGE, ERROR };
-	explicit RadioReceivedMessage(const uint64_t id, const std::string &message, const uint64_t receive_time)
-	    : id_(id), message_(std::move(message)), receive_time_(receive_time) {
+	explicit RadioReceivedMessage(RadioSubscription &subscription, const uint64_t id, MessageType &type,
+	                              const std::string &message, const uint64_t receive_time)
+	    : subscription_(subscription), id_(id), type_(type), message_(std::move(message)), receive_time_(receive_time) {
 	}
 
 	void increment_seen_count() {
 		seen_count_.fetch_add(1);
+	}
+
+	const MessageType type() const {
+		return type_;
 	}
 
 	const std::string &message() const {
@@ -30,9 +37,16 @@ public:
 		return id_;
 	}
 
+	RadioSubscription &subscription() const {
+		return subscription_;
+	}
+
 private:
 	// Store the ID of the message, it never changes and is relative to the subscription.
+	RadioSubscription &subscription_;
 	const uint64_t id_;
+
+	const MessageType type_;
 
 	const std::string message_;
 	const uint64_t receive_time_;
@@ -41,4 +55,4 @@ private:
 	std::atomic<uint64_t> seen_count_ {0};
 };
 
-}
+} // namespace duckdb

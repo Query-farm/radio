@@ -2,6 +2,7 @@
 #include "radio_extension.hpp"
 #include "radio_transmit_message.hpp"
 #include "radio_utils.hpp"
+#include <algorithm>
 
 namespace duckdb {
 
@@ -51,6 +52,8 @@ public:
 	void clear();
 
 	void record_transmit_attempt(bool success, uint64_t last_attempt_time);
+
+	int32_t retry_delay_time_ms(const RadioTransmitMessage &message) const;
 
 	RadioTransmitMessageQueueState state() const;
 

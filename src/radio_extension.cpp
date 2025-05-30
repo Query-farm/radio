@@ -33,7 +33,6 @@ struct RadioSubscribeBindData : public TableFunctionData {
 	RadioSubscriptionParameters params_;
 
 	bool did_subscribe = false;
-	vector<std::pair<std::shared_ptr<RadioSubscription>, std::shared_ptr<RadioReceivedMessage>>> messages_;
 };
 
 static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, TableFunctionBindInput &input,
@@ -116,7 +115,6 @@ struct RadioUnsubscribeBindData : public TableFunctionData {
 	string url_;
 
 	bool did_unsubscribe = false;
-	vector<std::pair<std::shared_ptr<RadioSubscription>, std::shared_ptr<RadioReceivedMessage>>> messages_;
 };
 
 static unique_ptr<FunctionData> RadioUnsubscribeBind(ClientContext &context, TableFunctionBindInput &input,
@@ -482,16 +480,16 @@ struct RadioReceivedMessagesBindData : public TableFunctionData {
 		for (auto &subscription : radio.GetSubscriptions()) {
 			// Add all messages for each subscription.
 			for (auto &message : subscription->receive_snapshot(RadioReceivedMessage::MESSAGE)) {
-				messages_.emplace_back(subscription, message);
+				messages_.emplace_back(message);
 			}
 			for (auto &message : subscription->receive_snapshot(RadioReceivedMessage::ERROR)) {
-				messages_.emplace_back(subscription, message);
+				messages_.emplace_back(message);
 			}
 		}
 	}
 
 	size_t current_row = 0;
-	vector<std::pair<std::shared_ptr<RadioSubscription>, std::shared_ptr<RadioReceivedMessage>>> messages_;
+	vector<std::shared_ptr<RadioReceivedMessage>> messages_;
 };
 
 static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context, TableFunctionBindInput &input,
@@ -504,6 +502,9 @@ static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
+	names.emplace_back("message_type");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("receive_time");
@@ -528,23 +529,24 @@ void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, D
 	}
 
 	// Return a row at a time for now.
-	auto &record = bind_data.messages_[bind_data.current_row++];
+	auto &message = bind_data.messages_[bind_data.current_row++];
 	output.SetCardinality(1);
 
-	auto &subscription = record.first;
-	auto &message = record.second;
+	auto &subscription = message->subscription();
 
 	// From the subscription
-	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
+	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription.id();
 	FlatVector::GetData<string_t>(output.data[1])[0] =
-	    StringVector::AddStringOrBlob(output.data[1], subscription->url());
+	    StringVector::AddStringOrBlob(output.data[1], subscription.url());
 
 	// From the message
 	FlatVector::GetData<uint64_t>(output.data[2])[0] = message->id();
-	FlatVector::GetData<uint64_t>(output.data[3])[0] = message->receive_time();
-	FlatVector::GetData<uint64_t>(output.data[4])[0] = message->seen_count();
-	FlatVector::GetData<string_t>(output.data[5])[0] =
-	    StringVector::AddStringOrBlob(output.data[5], message->message());
+	FlatVector::GetData<string_t>(output.data[3])[0] = StringVector::AddStringOrBlob(
+	    output.data[3], message->type() == RadioReceivedMessage::MESSAGE ? "message" : "error");
+	FlatVector::GetData<uint64_t>(output.data[4])[0] = message->receive_time();
+	FlatVector::GetData<uint64_t>(output.data[5])[0] = message->seen_count();
+	FlatVector::GetData<string_t>(output.data[6])[0] =
+	    StringVector::AddStringOrBlob(output.data[6], message->message());
 }
 
 static void LoadInternal(DatabaseInstance &instance) {

@@ -135,7 +135,8 @@ public:
 			if (message_ids) {
 				message_ids[i] = message_id;
 			}
-			auto entry = std::make_shared<RadioReceivedMessage>(message_id, messages[i].first, messages[i].second);
+			auto entry =
+			    std::make_shared<RadioReceivedMessage>(*this, message_id, type, messages[i].first, messages[i].second);
 			items.push_back(entry);
 		}
 		get_queue_for_type(type).push(items);
