@@ -174,7 +174,11 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 		throw BinderException("radio_subscription_transmit_messages requires 1 argument");
 	}
 
-	auto url = input.inputs[0].GetValue<string>();
+	const auto url = input.inputs[0].GetValue<string>();
+	auto subscription = GetRadio().GetSubscription(url);
+	if (!subscription) {
+		throw InvalidInputException("No subscription found for URL: " + url);
+	}
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
@@ -188,11 +192,11 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("last_attempt_end_time");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
+	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
 	names.emplace_back("state");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
-	names.emplace_back("expire_time");
+	return_types.emplace_back(LogicalType(LogicalTypeId::UINTEGER));
+	names.emplace_back("expire_duration_ms");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UINTEGER));
 	names.emplace_back("max_attempts");
@@ -205,11 +209,6 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("result");
-
-	auto subscription = GetRadio().GetSubscription(url);
-	if (!subscription) {
-		throw InvalidInputException("No subscription found for URL: " + url);
-	}
 
 	return make_uniq<RadioSubscriptionTransmitMessagesBindData>(GetRadio(), subscription);
 }
@@ -255,7 +254,7 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 	}
 	FlatVector::GetData<string_t>(output.data[4])[0] = StringVector::AddStringOrBlob(output.data[4], state_str);
 
-	FlatVector::GetData<uint64_t>(output.data[5])[0] = message->send_expire_time();
+	FlatVector::GetData<uint32_t>(output.data[5])[0] = message->expire_duration_ms();
 	FlatVector::GetData<uint32_t>(output.data[6])[0] = message->max_attempts();
 	FlatVector::GetData<uint32_t>(output.data[7])[0] = state.attempts_made;
 	FlatVector::GetData<string_t>(output.data[8])[0] =
@@ -266,8 +265,9 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 
 struct RadioTransmitMessageAddBindData : public TableFunctionData {
 	explicit RadioTransmitMessageAddBindData(Radio &radio, const string &url, const string &message,
-	                                         const uint32_t max_attempts, const int64_t expire_time)
-	    : radio_(radio), url_(url), message_(message), max_attempts_(max_attempts), expire_time_(expire_time) {
+	                                         const uint32_t max_attempts, const int64_t expire_duration_ms)
+	    : radio_(radio), url_(url), message_(message), max_attempts_(max_attempts),
+	      expire_duration_ms_(expire_duration_ms) {
 	}
 
 	Radio &radio_;
@@ -275,7 +275,7 @@ struct RadioTransmitMessageAddBindData : public TableFunctionData {
 	const std::string url_;
 	const std::string message_;
 	const uint32_t max_attempts_;
-	const int64_t expire_time_;
+	const int64_t expire_duration_ms_;
 
 	bool did_add = false;
 };
@@ -295,8 +295,7 @@ static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &conte
 	}
 	auto expire_time = input.inputs[3].GetValue<interval_t>();
 
-	auto current_time = RadioCurrentTimeMillis();
-	auto real_expire_time = current_time + Interval::GetMilli(expire_time);
+	auto real_expire_time = Interval::GetMilli(expire_time);
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
@@ -324,7 +323,7 @@ void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p,
 
 	RadioTransmitMessageParts message_parts;
 	message_parts.message = bind_data.message_;
-	message_parts.expire_time = bind_data.expire_time_;
+	message_parts.expire_duration_ms = bind_data.expire_duration_ms_;
 	message_parts.max_attempts = bind_data.max_attempts_;
 
 	subscription->add_transmit_messages({message_parts}, &message_id);
@@ -380,8 +379,17 @@ RadioSubscription::RadioSubscription(const uint64_t id, const std::string &url,
 	});
 
 	// FIXME: need a way to handle transmit messages in a seperate thread.
+	sender_thread_ = std::thread([this] { this->transmit_messages_.senderLoop(this->webSocket); });
 
 	webSocket.start();
+}
+
+RadioSubscription::~RadioSubscription() {
+	transmit_messages_.stop();
+	if (sender_thread_.joinable()) {
+		sender_thread_.join();
+	}
+	webSocket.stop();
 }
 
 void RadioSubscription::add_received_messages(RadioReceivedMessage::MessageType type,
@@ -413,7 +421,7 @@ void RadioSubscription::add_transmit_messages(std::vector<RadioTransmitMessagePa
 			message_ids[i] = message_id;
 		}
 		auto entry = std::make_shared<RadioTransmitMessage>(message_id, messages[i].message, current_time,
-		                                                    messages[i].max_attempts, messages[i].expire_time);
+		                                                    messages[i].max_attempts, messages[i].expire_duration_ms);
 		items.emplace_back(std::move(entry));
 	}
 	transmit_messages_.push(items);

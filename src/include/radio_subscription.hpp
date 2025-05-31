@@ -32,15 +32,11 @@ private:
 		}
 	}
 
-	ix::WebSocket webSocket;
-
 public:
 	explicit RadioSubscription(const uint64_t id, const std::string &url, const RadioSubscriptionParameters &params,
 	                           uint64_t creation_time, Radio &radio);
 
-	~RadioSubscription() {
-		webSocket.stop();
-	}
+	~RadioSubscription();
 
 	void set_receive_queue_size(RadioReceivedMessage::MessageType type, uint32_t capacity) {
 		get_queue_for_type(type).resize(capacity);
@@ -107,6 +103,8 @@ public:
 	void add_transmit_messages(std::vector<RadioTransmitMessageParts> messages, uint64_t *message_ids);
 
 private:
+	void senderLoop();
+
 	// Store the ID of the subscription, it never changes.
 	const uint64_t id_;
 
@@ -139,6 +137,10 @@ private:
 	RadioTransmitMessageQueue transmit_messages_;
 
 	Radio &radio_;
+
+	ix::WebSocket webSocket;
+
+	std::thread sender_thread_;
 };
 
 void RadioSubscriptionAddFunctions(DatabaseInstance &instance);

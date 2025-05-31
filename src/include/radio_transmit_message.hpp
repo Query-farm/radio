@@ -5,7 +5,7 @@ namespace duckdb {
 
 struct RadioTransmitMessageParts {
 	std::string message;
-	uint64_t expire_time;
+	uint64_t expire_duration_ms;
 	uint32_t max_attempts;
 };
 
@@ -19,7 +19,7 @@ struct RadioTransmitMessageState {
 
 	// The time at which the next attempt to send the message will be made,
 	// be default it will be sent right away.
-	uint64_t next_attempt_time = 0;
+	std::optional<std::chrono::steady_clock::time_point> next_attempt_time = std::nullopt;
 
 	uint32_t attempts_made = 0;
 
@@ -32,11 +32,13 @@ struct RadioTransmitMessageState {
 class RadioTransmitMessage {
 public:
 	explicit RadioTransmitMessage(const uint64_t id, const std::string &message, const uint64_t creation_time,
-	                              const uint32_t max_attempts, const uint64_t expire_time)
+	                              const uint32_t max_attempts, const uint64_t expire_duration_ms)
 	    : id_(id), message_(std::move(message)), creation_time_(creation_time), max_attempts_(max_attempts),
-	      send_expire_time_(expire_time) {
+	      expire_duration_ms_(expire_duration_ms) {
 		D_ASSERT(max_attempts > 0);
-		D_ASSERT(expire_time > creation_time);
+		const auto now = std::chrono::steady_clock::now();
+		send_expire_time_ = now + std::chrono::milliseconds(expire_duration_ms);
+		state_.next_attempt_time = now;
 	}
 
 	const std::string &message() const {
@@ -71,17 +73,18 @@ public:
 
 			if (s_.attempts_made >= max_attempts_) {
 				s_.state = State::RETRIES_EXHAUSTED;
-				s_.next_attempt_time = 0;
+				s_.next_attempt_time = std::nullopt;
 			} else {
+				auto now = std::chrono::steady_clock::now();
 				const auto delay = std::min(
 				    static_cast<int32_t>(retry_initial_delay_ms * std::pow(retry_multiplier, s_.attempts_made)),
 				    retry_max_delay_ms);
 
-				const auto next_attempt_time = current_time + delay;
+				const auto next_attempt_time = now + std::chrono::milliseconds(delay);
 				if (next_attempt_time > send_expire_time_) {
 					// If the next attempt time is after the expiration, we should not retry.
 					s_.state = State::TIME_EXPIRED;
-					s_.next_attempt_time = 0;
+					s_.next_attempt_time = std::nullopt;
 				} else {
 					s_.next_attempt_time = next_attempt_time;
 				}
@@ -97,7 +100,7 @@ public:
 			s_.last_attempt_start_time = current_time;
 			s_.last_attempt_end_time = 0;
 			s_.transmit_result.clear();
-			s_.next_attempt_time = 0;
+			s_.next_attempt_time = std::nullopt;
 			s_.attempts_made++;
 		}
 	}
@@ -106,8 +109,8 @@ public:
 		return id_;
 	}
 
-	uint64_t send_expire_time() const {
-		return send_expire_time_;
+	uint32_t expire_duration_ms() const {
+		return expire_duration_ms_;
 	}
 
 	uint32_t max_attempts() const {
@@ -126,7 +129,9 @@ private:
 
 	// The time at which the message is expired and will no longer be sent,
 	// if it hasn't previously been sent.
-	const uint64_t send_expire_time_;
+	std::chrono::steady_clock::time_point send_expire_time_;
+
+	const uint32_t expire_duration_ms_;
 
 	RadioTransmitMessageState state_;
 };

@@ -12,6 +12,7 @@
     "map": "cpp",
     "algorithm": "cpp",
     "deque": "cpp",
-    "queue": "cpp"
+    "queue": "cpp",
+    "__config": "cpp"
   }
 }
