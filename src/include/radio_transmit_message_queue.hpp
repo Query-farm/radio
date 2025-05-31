@@ -68,7 +68,11 @@ public:
 		pending_by_send_cv_.notify_all();
 	}
 
+	void delete_finished();
+
 private:
+	void rebuild_pending_by_send_time();
+
 	int32_t retry_initial_delay_ms_;
 	double retry_multiplier_;
 	int32_t retry_max_delay_ms_;

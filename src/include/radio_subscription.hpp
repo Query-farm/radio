@@ -102,6 +102,10 @@ public:
 
 	void add_transmit_messages(std::vector<RadioTransmitMessageParts> messages, uint64_t *message_ids);
 
+	void transmit_messages_delete_finished() {
+		transmit_messages_.delete_finished();
+	}
+
 private:
 	void senderLoop();
 

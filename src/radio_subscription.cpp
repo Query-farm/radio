@@ -11,6 +11,57 @@
 
 namespace duckdb {
 
+struct RadioSubscriptionTransmitMessagesDeleteFinishedBindData : public TableFunctionData {
+	explicit RadioSubscriptionTransmitMessagesDeleteFinishedBindData(Radio &radio, const string &url)
+	    : radio_(radio), url_(url) {
+	}
+
+	Radio &radio_;
+
+	const std::string url_;
+	bool did_delete = false;
+};
+
+static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesDeleteFinishedBind(ClientContext &context,
+                                                                                    TableFunctionBindInput &input,
+                                                                                    vector<LogicalType> &return_types,
+                                                                                    vector<string> &names) {
+
+	if (input.inputs.size() != 1) {
+		throw BinderException("radio_subscription_transmit_messages_delete_finished requires 1 argument");
+	}
+
+	auto url = input.inputs[0].GetValue<string>();
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
+	names.emplace_back("ok");
+
+	return make_uniq<RadioSubscriptionTransmitMessagesDeleteFinishedBindData>(GetRadio(), url);
+}
+
+void RadioSubscriptionTransmitMessagesDeleteFinished(ClientContext &context, TableFunctionInput &data_p,
+                                                     DataChunk &output) {
+	D_ASSERT(data_p.bind_data);
+	auto &bind_data = data_p.bind_data->CastNoConst<RadioSubscriptionTransmitMessagesDeleteFinishedBindData>();
+
+	if (bind_data.did_delete) {
+		// If we already added the message, just return no rows.
+		output.SetCardinality(0);
+		return;
+	}
+
+	bind_data.did_delete = true;
+
+	auto subscription = bind_data.radio_.GetSubscription(bind_data.url_);
+	if (!subscription) {
+		throw InvalidInputException("No subscription found for URL: " + bind_data.url_);
+	}
+
+	subscription->transmit_messages_delete_finished();
+	output.SetCardinality(1);
+	FlatVector::GetData<bool>(output.data[0])[0] = true;
+}
+
 struct RadioSubscriptionReceivedMessageAddBindData : public TableFunctionData {
 	explicit RadioSubscriptionReceivedMessageAddBindData(Radio &radio, const string &url,
 	                                                     RadioReceivedMessage::MessageType type, const string &message)
@@ -351,6 +402,11 @@ void RadioSubscriptionAddFunctions(DatabaseInstance &instance) {
 	    "radio_subscription_received_message_add", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BLOB},
 	    RadioSubscriptionReceivedMessageAdd, RadioSubscriptionReceivedMessageAddBind);
 	ExtensionUtil::RegisterFunction(instance, received_message_add_function);
+
+	auto transmit_messages_delete_finished = TableFunction(
+	    "radio_subscription_transmit_messages_delete_finished", {LogicalType::VARCHAR},
+	    RadioSubscriptionTransmitMessagesDeleteFinished, RadioSubscriptionTransmitMessagesDeleteFinishedBind);
+	ExtensionUtil::RegisterFunction(instance, transmit_messages_delete_finished);
 
 	auto received_messages_function =
 	    TableFunction("radio_subscription_received_messages", {LogicalType::VARCHAR, LogicalType::VARCHAR},

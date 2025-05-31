@@ -3,6 +3,16 @@
 
 namespace duckdb {
 
+void RadioTransmitMessageQueue::rebuild_pending_by_send_time() {
+	pending_by_send_time_ = {};
+	for (const auto &[_, msg] : messages_by_id_) {
+		if (msg->state().state == RadioTransmitMessageProcessingState::PENDING) {
+			pending_by_send_time_.push(msg);
+		}
+	}
+	pending_by_send_cv_.notify_one();
+}
+
 void RadioTransmitMessageQueue::push(const std::vector<std::shared_ptr<RadioTransmitMessage>> &items) {
 	std::lock_guard<std::mutex> lock(mtx);
 
@@ -13,6 +23,23 @@ void RadioTransmitMessageQueue::push(const std::vector<std::shared_ptr<RadioTran
 		state_.latest_queue_time = std::max(item->creation_time(), state_.latest_queue_time);
 	}
 	pending_by_send_cv_.notify_one();
+}
+
+void RadioTransmitMessageQueue::delete_finished() {
+	std::lock_guard<std::mutex> lock(mtx);
+
+	// Clear the pending messages where status == SENT
+	for (auto it = messages_by_id_.begin(); it != messages_by_id_.end();) {
+		if (it->second->state().state == RadioTransmitMessageProcessingState::SENT ||
+		    it->second->state().state == RadioTransmitMessageProcessingState::TIME_EXPIRED ||
+		    it->second->state().state == RadioTransmitMessageProcessingState::RETRIES_EXHAUSTED) {
+			it = messages_by_id_.erase(it);
+		} else {
+			++it;
+		}
+	}
+
+	rebuild_pending_by_send_time();
 }
 
 std::shared_ptr<RadioTransmitMessage> RadioTransmitMessageQueue::wait_and_pop() {
@@ -131,13 +158,7 @@ void RadioTransmitMessageQueue::remove_by_ids(const std::unordered_set<uint64_t>
 		messages_by_id_.erase(id);
 	}
 
-	pending_by_send_time_ = {};
-	for (const auto &[_, msg] : messages_by_id_) {
-		if (msg->state().state == RadioTransmitMessageProcessingState::PENDING) {
-			pending_by_send_time_.push(msg);
-		}
-		break;
-	}
+	rebuild_pending_by_send_time();
 }
 
 uint64_t RadioTransmitMessageQueue::size() const {
@@ -159,6 +180,7 @@ void RadioTransmitMessageQueue::clear() {
 	std::lock_guard<std::mutex> lock(mtx);
 	messages_by_id_.clear();
 	pending_by_send_time_ = {};
+	pending_by_send_cv_.notify_all();
 }
 
 void RadioTransmitMessageQueue::update_message_state(std::shared_ptr<RadioTransmitMessage> message,
