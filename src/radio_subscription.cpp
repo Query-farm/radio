@@ -165,6 +165,18 @@ struct RadioSubscriptionTransmitMessagesBindData : public TableFunctionData {
 	vector<std::shared_ptr<RadioTransmitMessage>> messages_;
 };
 
+static LogicalType CreateEnumType(const string &name, const vector<string> &members) {
+	auto varchar_vector = Vector(LogicalType::VARCHAR, members.size());
+	auto varchar_data = FlatVector::GetData<string_t>(varchar_vector);
+	for (idx_t i = 0; i < members.size(); i++) {
+		auto str = string_t(members[i]);
+		varchar_data[i] = str.IsInlined() ? str : StringVector::AddString(varchar_vector, str);
+	}
+	auto enum_type = LogicalType::ENUM(name, varchar_vector, members.size());
+	enum_type.SetAlias(name);
+	return enum_type;
+}
+
 static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientContext &context,
                                                                       TableFunctionBindInput &input,
                                                                       vector<LogicalType> &return_types,
@@ -193,7 +205,7 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 	names.emplace_back("last_attempt_end_time");
 
 	return_types.emplace_back(
-	    LogicalType::ENUM({"pending", "sent", "sending", "retries_exhausted", "time_expired"}, 5));
+	    CreateEnumType("transmit_message_state", {"pending", "sent", "sending", "retries_exhausted", "time_expired"}));
 	names.emplace_back("state");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UINTEGER));
@@ -235,7 +247,7 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 	STORE_NULLABLE_TIMESTAMP(output.data[2], state.last_attempt_start_time);
 	STORE_NULLABLE_TIMESTAMP(output.data[3], state.last_attempt_end_time);
 
-	std::string state_idx;
+	int16_t state_idx;
 	switch (state.state) {
 	case RadioTransmitMessageProcessingState::PENDING:
 		state_idx = 0;
