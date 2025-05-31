@@ -106,6 +106,10 @@ public:
 		transmit_messages_.delete_finished();
 	}
 
+	void transmit_messages_delete_by_ids(const std::unordered_set<uint64_t> &ids_to_remove) {
+		transmit_messages_.delete_by_ids(ids_to_remove);
+	}
+
 private:
 	void senderLoop();
 

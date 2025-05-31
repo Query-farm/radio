@@ -70,6 +70,14 @@ public:
 
 	void delete_finished();
 
+	void delete_by_ids(const std::unordered_set<uint64_t> &ids_to_remove) {
+		std::lock_guard<std::mutex> lock(mtx);
+		for (uint64_t id : ids_to_remove) {
+			messages_by_id_.erase(id);
+		}
+		rebuild_pending_by_send_time();
+	}
+
 private:
 	void rebuild_pending_by_send_time();
 
