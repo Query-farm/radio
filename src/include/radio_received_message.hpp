@@ -7,7 +7,36 @@ class RadioSubscription;
 
 class RadioReceivedMessage {
 public:
-	enum MessageType { MESSAGE, ERROR };
+	enum MessageType { MESSAGE, ERROR, CONNECTION, DISCONNECTION };
+
+	static MessageType convert_to_message_type(const std::string &type) {
+		if (type == "message") {
+			return MESSAGE;
+		} else if (type == "error") {
+			return ERROR;
+		} else if (type == "connection") {
+			return CONNECTION;
+		} else if (type == "disconnection") {
+			return DISCONNECTION;
+		}
+		throw InvalidInputException("Invalid message type: " + type);
+	}
+
+	static uint16_t message_type_to_enum_index(MessageType type) {
+		switch (type) {
+		case MESSAGE:
+			return 0;
+		case ERROR:
+			return 1;
+		case CONNECTION:
+			return 2;
+		case DISCONNECTION:
+			return 3;
+		default:
+			throw InvalidInputException("Invalid message type for code conversion");
+		}
+	}
+
 	explicit RadioReceivedMessage(RadioSubscription &subscription, const uint64_t id, MessageType &type,
 	                              const std::string &message, const uint64_t receive_time)
 	    : subscription_(subscription), id_(id), type_(type), message_(std::move(message)), receive_time_(receive_time) {

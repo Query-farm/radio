@@ -21,6 +21,18 @@ Radio &GetRadio() {
 	return instance;
 }
 
+static LogicalType CreateEnumType(const string &name, const vector<string> &members) {
+	auto varchar_vector = Vector(LogicalType::VARCHAR, members.size());
+	auto varchar_data = FlatVector::GetData<string_t>(varchar_vector);
+	for (idx_t i = 0; i < members.size(); i++) {
+		auto str = string_t(members[i]);
+		varchar_data[i] = str.IsInlined() ? str : StringVector::AddString(varchar_vector, str);
+	}
+	auto enum_type = LogicalType::ENUM(name, varchar_vector, members.size());
+	enum_type.SetAlias(name);
+	return enum_type;
+}
+
 struct RadioSubscribeBindData : public TableFunctionData {
 	explicit RadioSubscribeBindData(Radio &radio, const string &url, RadioSubscriptionParameters &params,
 	                                uint64_t creation_time)
@@ -50,11 +62,11 @@ static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, Table
 			if (params.receive_message_capacity <= 0) {
 				throw BinderException("radio_subscribe requires receive_message_capacity to be greater than 0");
 			}
-		} else if (loption == "receive_error_capacity") {
-			params.receive_error_capacity = kv.second.GetValue<int32_t>();
-			if (params.receive_error_capacity <= 0) {
-				throw BinderException("radio_subscribe requires receive_error_capacity to be greater than 0");
-			}
+			// } else if (loption == "receive_error_capacity") {
+			// 	params.receive_error_capacity = kv.second.GetValue<int32_t>();
+			// 	if (params.receive_error_capacity <= 0) {
+			// 		throw BinderException("radio_subscribe requires receive_error_capacity to be greater than 0");
+			// 	}
 			// } else if (loption == "transmit_message_capacity") {
 			// 	params.transmit_message_capacity = kv.second.GetValue<int32_t>();
 			// 	if (params.transmit_message_capacity <= 0) {
@@ -235,22 +247,18 @@ void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, Data
 	STORE_NULLABLE_TIMESTAMP(output.data[3], subscription->activation_time());
 	FlatVector::GetData<bool>(output.data[4])[0] = subscription->disabled() ? 1 : 0;
 
-	STORE_NULLABLE_TIMESTAMP(output.data[5], state.received_errors.latest_receive_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[5], state.received.latest_receive_time);
 
-	STORE_NULLABLE_TIMESTAMP(output.data[6], state.received_messages.latest_receive_time);
+	FlatVector::GetData<uint64_t>(output.data[6])[0] = state.received.odometer;
 
-	FlatVector::GetData<uint64_t>(output.data[7])[0] = state.received_errors.odometer;
+	FlatVector::GetData<uint64_t>(output.data[7])[0] = state.transmit.odometer;
 
-	FlatVector::GetData<uint64_t>(output.data[8])[0] = state.received_messages.odometer;
+	STORE_NULLABLE_TIMESTAMP(output.data[8], state.transmit.latest_queue_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[9], state.transmit.latest_success_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[10], state.transmit.latest_failure_time);
 
-	FlatVector::GetData<uint64_t>(output.data[9])[0] = state.transmit.odometer;
-
-	STORE_NULLABLE_TIMESTAMP(output.data[10], state.transmit.latest_queue_time);
-	STORE_NULLABLE_TIMESTAMP(output.data[11], state.transmit.latest_success_time);
-	STORE_NULLABLE_TIMESTAMP(output.data[12], state.transmit.latest_failure_time);
-
-	FlatVector::GetData<uint64_t>(output.data[13])[0] = state.transmit.successes;
-	FlatVector::GetData<uint64_t>(output.data[14])[0] = state.transmit.failures;
+	FlatVector::GetData<uint64_t>(output.data[11])[0] = state.transmit.successes;
+	FlatVector::GetData<uint64_t>(output.data[12])[0] = state.transmit.failures;
 
 	output.SetCardinality(1);
 }
@@ -275,15 +283,8 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 	names.emplace_back("disabled");
 
 	// Ideally we'd have a struct since we have repeated fields per queue.
-
-	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
-	names.emplace_back("received_last_error_time");
-
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("received_last_message_time");
-
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
-	names.emplace_back("received_errors_processed");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("received_messages_processed");
@@ -401,9 +402,6 @@ static unique_ptr<FunctionData> RadioListenBind(ClientContext &context, TableFun
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("messages_pending");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
-	names.emplace_back("errors_pending");
-
 	return make_uniq<RadioListenBindData>(GetRadio(), wait_for_messages, duration_milliseconds);
 }
 
@@ -415,9 +413,8 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 		while (bind_data.current_subscription_index < bind_data.subscriptions_.size()) {
 			auto &subscription = bind_data.subscriptions_[bind_data.current_subscription_index++];
 
-			auto messages_pending = subscription->receive_queue_size(RadioReceivedMessage::MESSAGE);
-			auto errors_pending = subscription->receive_queue_size(RadioReceivedMessage::ERROR);
-			if (messages_pending == 0 && errors_pending == 0) {
+			auto messages_pending = subscription->receive_queue_size();
+			if (messages_pending == 0) {
 				continue;
 			}
 
@@ -426,7 +423,6 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 			FlatVector::GetData<string_t>(output.data[1])[0] =
 			    StringVector::AddStringOrBlob(output.data[1], subscription->url());
 			FlatVector::GetData<uint64_t>(output.data[2])[0] = messages_pending;
-			FlatVector::GetData<uint64_t>(output.data[3])[0] = errors_pending;
 			bind_data.returned_any_rows = true;
 			return true;
 		}
@@ -475,10 +471,7 @@ struct RadioReceivedMessagesBindData : public TableFunctionData {
 	explicit RadioReceivedMessagesBindData(Radio &radio) {
 		for (auto &subscription : radio.GetSubscriptions()) {
 			// Add all messages for each subscription.
-			for (auto &message : subscription->receive_snapshot(RadioReceivedMessage::MESSAGE)) {
-				messages_.emplace_back(message);
-			}
-			for (auto &message : subscription->receive_snapshot(RadioReceivedMessage::ERROR)) {
+			for (auto &message : subscription->receive_snapshot()) {
 				messages_.emplace_back(message);
 			}
 		}
@@ -499,7 +492,8 @@ static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
+	return_types.emplace_back(
+	    CreateEnumType("received_message_type", {"message", "error", "connection", "disconnection"}));
 	names.emplace_back("message_type");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
@@ -537,8 +531,9 @@ void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, D
 
 	// From the message
 	FlatVector::GetData<uint64_t>(output.data[2])[0] = message->id();
-	FlatVector::GetData<string_t>(output.data[3])[0] = StringVector::AddStringOrBlob(
-	    output.data[3], message->type() == RadioReceivedMessage::MESSAGE ? "message" : "error");
+	FlatVector::GetData<uint16_t>(output.data[3])[0] =
+	    RadioReceivedMessage::message_type_to_enum_index(message->type());
+
 	FlatVector::GetData<uint64_t>(output.data[4])[0] = message->receive_time();
 	FlatVector::GetData<uint64_t>(output.data[5])[0] = message->seen_count();
 	FlatVector::GetData<string_t>(output.data[6])[0] =
@@ -553,8 +548,8 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto subscribe_function =
 	    TableFunction("radio_subscribe", {LogicalType::VARCHAR}, RadioSubscribe, RadioSubscribeBind);
 	subscribe_function.named_parameters["receive_message_capacity"] = LogicalType::INTEGER;
-	subscribe_function.named_parameters["receive_error_capacity"] = LogicalType::INTEGER;
-	// subscribe_function.named_parameters["transmit_message_capacity"] = LogicalType::INTEGER;
+	// subscribe_function.named_parameters["receive_error_capacity"] = LogicalType::INTEGER;
+	//  subscribe_function.named_parameters["transmit_message_capacity"] = LogicalType::INTEGER;
 
 	subscribe_function.named_parameters["transmit_retry_initial_delay_ms"] = LogicalType::INTEGER;
 	subscribe_function.named_parameters["transmit_retry_multiplier"] = LogicalType::DOUBLE;

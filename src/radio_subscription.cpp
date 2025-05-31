@@ -173,18 +173,18 @@ void RadioSubscriptionReceivedMessageAdd(ClientContext &context, TableFunctionIn
 	}
 
 	uint64_t message_id = 0;
-	subscription->add_received_messages(bind_data.message_type_, {{bind_data.message_, RadioCurrentTimeMillis()}},
-	                                    &message_id);
+	vector<RadioReceiveMessageParts> parts;
+	parts.push_back({bind_data.message_type_, bind_data.message_, RadioCurrentTimeMillis()});
+	subscription->add_received_messages(parts, &message_id);
 
 	output.SetCardinality(1);
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = message_id;
 }
 
 struct RadioSubscriptionReceivedMessagesBindData : public TableFunctionData {
-	explicit RadioSubscriptionReceivedMessagesBindData(Radio &radio, std::shared_ptr<RadioSubscription> subscription,
-	                                                   RadioReceivedMessage::MessageType message_type)
+	explicit RadioSubscriptionReceivedMessagesBindData(Radio &radio, std::shared_ptr<RadioSubscription> subscription)
 	    : radio_(radio), subscription_(subscription) {
-		messages_ = subscription->receive_snapshot(message_type);
+		messages_ = subscription->receive_snapshot();
 	}
 
 	Radio &radio_;
@@ -199,17 +199,11 @@ static unique_ptr<FunctionData> RadioSubscriptionReceivedMessagesBind(ClientCont
                                                                       vector<LogicalType> &return_types,
                                                                       vector<string> &names) {
 
-	if (input.inputs.size() != 2) {
-		throw BinderException("radio_subscription_received_messages requires 2 arguments");
+	if (input.inputs.size() != 1) {
+		throw BinderException("radio_subscription_received_messages requires 1 argument");
 	}
 
 	auto url = input.inputs[0].GetValue<string>();
-	auto message_type = input.inputs[1].GetValue<string>();
-
-	if (message_type != "message" && message_type != "error") {
-		throw BinderException(
-		    "radio_subscription_messages requires the second argument to be either 'message' or 'error'");
-	}
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
@@ -228,10 +222,7 @@ static unique_ptr<FunctionData> RadioSubscriptionReceivedMessagesBind(ClientCont
 		throw InvalidInputException("No subscription found for URL: " + url);
 	}
 
-	return make_uniq<RadioSubscriptionReceivedMessagesBindData>(GetRadio(), subscription,
-	                                                            message_type == "message"
-	                                                                ? RadioReceivedMessage::MessageType::MESSAGE
-	                                                                : RadioReceivedMessage::MessageType::ERROR);
+	return make_uniq<RadioSubscriptionReceivedMessagesBindData>(GetRadio(), subscription);
 }
 
 void RadioSubscriptionReceivedMessages(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -466,8 +457,8 @@ void RadioSubscriptionAddFunctions(DatabaseInstance &instance) {
 	ExtensionUtil::RegisterFunction(instance, transmit_messages_delete);
 
 	auto received_messages_function =
-	    TableFunction("radio_subscription_received_messages", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                  RadioSubscriptionReceivedMessages, RadioSubscriptionReceivedMessagesBind);
+	    TableFunction("radio_subscription_received_messages", {LogicalType::VARCHAR}, RadioSubscriptionReceivedMessages,
+	                  RadioSubscriptionReceivedMessagesBind);
 	ExtensionUtil::RegisterFunction(instance, received_messages_function);
 
 	auto transmit_messages_function =
@@ -485,22 +476,23 @@ void RadioSubscriptionAddFunctions(DatabaseInstance &instance) {
 RadioSubscription::RadioSubscription(const uint64_t id, const std::string &url,
                                      const RadioSubscriptionParameters &params, uint64_t creation_time, Radio &radio)
     : id_(id), url_(std::move(url)), creation_time_(creation_time), disabled_(false),
-      received_messages_(params.receive_message_capacity), received_errors_(params.receive_error_capacity),
+      received_messages_(params.receive_message_capacity),
       transmit_messages_(params.transmit_retry_initial_delay_ms, params.transmit_retry_multiplier,
                          params.transmit_retry_max_delay_ms),
       radio_(radio) {
 	webSocket.setUrl(url_);
 	webSocket.setOnMessageCallback([this](const ix::WebSocketMessagePtr &msg) {
+		const auto now = RadioCurrentTimeMillis();
 		if (msg->type == ix::WebSocketMessageType::Message) {
-			this->add_received_messages(RadioReceivedMessage::MessageType::MESSAGE,
-			                            {{msg->str, RadioCurrentTimeMillis()}});
+			this->add_received_messages({{RadioReceivedMessage::MessageType::MESSAGE, msg->str, now}});
 		} else if (msg->type == ix::WebSocketMessageType::Open) {
-			this->activation_time_ = RadioCurrentTimeMillis();
+			this->add_received_messages({{RadioReceivedMessage::MessageType::CONNECTION, "", now}});
+			this->activation_time_ = now;
 		} else if (msg->type == ix::WebSocketMessageType::Close) {
+			this->add_received_messages({{RadioReceivedMessage::MessageType::DISCONNECTION, "", now}});
 			this->activation_time_ = 0;
 		} else if (msg->type == ix::WebSocketMessageType::Error) {
-			this->add_received_messages(RadioReceivedMessage::MessageType::ERROR,
-			                            {{msg->errorInfo.reason, RadioCurrentTimeMillis()}});
+			this->add_received_messages({{RadioReceivedMessage::MessageType::ERROR, msg->errorInfo.reason, now}});
 		}
 	});
 
@@ -518,9 +510,7 @@ RadioSubscription::~RadioSubscription() {
 	webSocket.stop();
 }
 
-void RadioSubscription::add_received_messages(RadioReceivedMessage::MessageType type,
-                                              std::vector<std::pair<std::string, uint64_t>> messages,
-                                              uint64_t *message_ids) {
+void RadioSubscription::add_received_messages(std::vector<RadioReceiveMessageParts> messages, uint64_t *message_ids) {
 	std::vector<std::shared_ptr<RadioReceivedMessage>> items;
 
 	for (size_t i = 0; i < messages.size(); i++) {
@@ -528,11 +518,12 @@ void RadioSubscription::add_received_messages(RadioReceivedMessage::MessageType 
 		if (message_ids) {
 			message_ids[i] = message_id;
 		}
-		auto entry =
-		    std::make_shared<RadioReceivedMessage>(*this, message_id, type, messages[i].first, messages[i].second);
+		auto entry = std::make_shared<RadioReceivedMessage>(*this, message_id, messages[i].type, messages[i].message,
+		                                                    messages[i].receive_time);
+
 		items.push_back(entry);
 	}
-	get_queue_for_type(type).push(items);
+	received_messages_.push(items);
 
 	radio_.NotifyHasMessages();
 }

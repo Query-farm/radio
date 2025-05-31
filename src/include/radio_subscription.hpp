@@ -13,24 +13,17 @@ namespace duckdb {
 class Radio;
 
 struct RadioSubscriptionQueueState {
-	RadioReceivedMessageQueueState received_messages;
-	RadioReceivedMessageQueueState received_errors;
+	RadioReceivedMessageQueueState received;
 	RadioTransmitMessageQueueState transmit;
 };
 
-class RadioSubscription {
+struct RadioReceiveMessageParts {
+	RadioReceivedMessage::MessageType type;
+	std::string message;
+	uint64_t receive_time;
+};
 
-private:
-	RadioReceivedMessageQueue &get_queue_for_type(const RadioReceivedMessage::MessageType type) {
-		switch (type) {
-		case RadioReceivedMessage::MESSAGE:
-			return received_messages_;
-		case RadioReceivedMessage::ERROR:
-			return received_errors_;
-		default:
-			throw std::runtime_error("Unknown message type");
-		}
-	}
+class RadioSubscription {
 
 public:
 	explicit RadioSubscription(const uint64_t id, const std::string &url, const RadioSubscriptionParameters &params,
@@ -38,12 +31,12 @@ public:
 
 	~RadioSubscription();
 
-	void set_receive_queue_size(RadioReceivedMessage::MessageType type, uint32_t capacity) {
-		get_queue_for_type(type).resize(capacity);
+	void set_receive_queue_size(uint32_t capacity) {
+		received_messages_.resize(capacity);
 	}
 
-	std::vector<std::shared_ptr<RadioReceivedMessage>> receive_snapshot(RadioReceivedMessage::MessageType type) {
-		return get_queue_for_type(type).snapshot();
+	std::vector<std::shared_ptr<RadioReceivedMessage>> receive_snapshot() {
+		return received_messages_.snapshot();
 	}
 
 	std::vector<std::shared_ptr<RadioTransmitMessage>> transmit_snapshot() {
@@ -59,8 +52,8 @@ public:
 		return url_;
 	}
 
-	uint64_t receive_queue_size(RadioReceivedMessage::MessageType type) {
-		return get_queue_for_type(type).size();
+	uint64_t receive_queue_size() {
+		return received_messages_.size();
 	}
 
 	uint64_t creation_time() const {
@@ -73,8 +66,7 @@ public:
 
 	RadioSubscriptionQueueState state() {
 		RadioSubscriptionQueueState state;
-		state.received_messages = get_queue_for_type(RadioReceivedMessage::MESSAGE).state();
-		state.received_errors = get_queue_for_type(RadioReceivedMessage::ERROR).state();
+		state.received = received_messages_.state();
 		state.transmit = transmit_messages_.state();
 		return state;
 	}
@@ -92,13 +84,12 @@ public:
 		disabled_ = disabled;
 	}
 
-	void clear(RadioReceivedMessage::MessageType type) {
-		return get_queue_for_type(type).clear();
+	void clear_received() {
+		return received_messages_.clear();
 	}
 
 	// This could be called by another thread.
-	void add_received_messages(RadioReceivedMessage::MessageType type,
-	                           std::vector<std::pair<std::string, uint64_t>> messages, uint64_t *message_ids = nullptr);
+	void add_received_messages(std::vector<RadioReceiveMessageParts> messages, uint64_t *message_ids = nullptr);
 
 	void add_transmit_messages(std::vector<RadioTransmitMessageParts> messages, uint64_t *message_ids);
 
@@ -138,9 +129,6 @@ private:
 
 	// Keep a queue of messages here, so its easier to manage rather than a shared queue.
 	RadioReceivedMessageQueue received_messages_;
-
-	// Store the latest error message.
-	RadioReceivedMessageQueue received_errors_;
 
 	RadioTransmitMessageQueue transmit_messages_;
 
