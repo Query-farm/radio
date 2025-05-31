@@ -192,7 +192,8 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("last_attempt_end_time");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
+	return_types.emplace_back(
+	    LogicalType::ENUM({"pending", "sent", "sending", "retries_exhausted", "time_expired"}, 5));
 	names.emplace_back("state");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UINTEGER));
@@ -234,25 +235,25 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 	STORE_NULLABLE_TIMESTAMP(output.data[2], state.last_attempt_start_time);
 	STORE_NULLABLE_TIMESTAMP(output.data[3], state.last_attempt_end_time);
 
-	std::string state_str;
+	std::string state_idx;
 	switch (state.state) {
 	case RadioTransmitMessageProcessingState::PENDING:
-		state_str = "pending";
+		state_idx = 0;
 		break;
 	case RadioTransmitMessageProcessingState::SENT:
-		state_str = "sent";
+		state_idx = 1;
 		break;
 	case RadioTransmitMessageProcessingState::SENDING:
-		state_str = "sending";
+		state_idx = 2;
 		break;
 	case RadioTransmitMessageProcessingState::RETRIES_EXHAUSTED:
-		state_str = "retries_exhausted";
+		state_idx = 3;
 		break;
 	case RadioTransmitMessageProcessingState::TIME_EXPIRED:
-		state_str = "time_expired";
+		state_idx = 4;
 		break;
 	}
-	FlatVector::GetData<string_t>(output.data[4])[0] = StringVector::AddStringOrBlob(output.data[4], state_str);
+	FlatVector::GetData<int16_t>(output.data[4])[0] = state_idx;
 
 	FlatVector::GetData<uint32_t>(output.data[5])[0] = message->expire_duration_ms();
 	FlatVector::GetData<uint32_t>(output.data[6])[0] = message->max_attempts();
