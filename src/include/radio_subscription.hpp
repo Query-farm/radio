@@ -101,6 +101,10 @@ public:
 		transmit_messages_.delete_by_ids(ids_to_remove);
 	}
 
+	bool flush_complete(const std::chrono::steady_clock::time_point &timeout) {
+		return transmit_messages_.flush_complete(timeout);
+	}
+
 private:
 	void senderLoop();
 

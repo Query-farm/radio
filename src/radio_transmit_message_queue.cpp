@@ -10,7 +10,7 @@ void RadioTransmitMessageQueue::rebuild_pending_by_send_time() {
 			pending_by_send_time_.push(msg);
 		}
 	}
-	pending_by_send_cv_.notify_one();
+	pending_by_send_cv_.notify_all();
 }
 
 void RadioTransmitMessageQueue::push(const std::vector<std::shared_ptr<RadioTransmitMessage>> &items) {
@@ -22,7 +22,7 @@ void RadioTransmitMessageQueue::push(const std::vector<std::shared_ptr<RadioTran
 		messages_by_id_[item->id()] = item;
 		state_.latest_queue_time = std::max(item->creation_time(), state_.latest_queue_time);
 	}
-	pending_by_send_cv_.notify_one();
+	pending_by_send_cv_.notify_all();
 }
 
 void RadioTransmitMessageQueue::delete_finished() {
@@ -207,6 +207,13 @@ void RadioTransmitMessageQueue::update_message_state(std::shared_ptr<RadioTransm
 RadioTransmitMessageQueueState RadioTransmitMessageQueue::state() const {
 	std::lock_guard<std::mutex> lock(mtx);
 	return state_;
+}
+
+bool RadioTransmitMessageQueue::flush_complete(const std::chrono::steady_clock::time_point &timeout) {
+	std::unique_lock<std::mutex> lock(mtx);
+	bool success =
+	    pending_by_send_cv_.wait_until(lock, timeout, [&]() { return stop_flag_ || pending_by_send_time_.empty(); });
+	return success;
 }
 
 } // namespace duckdb

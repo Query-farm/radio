@@ -352,6 +352,72 @@ void RadioSleep(ClientContext &context, TableFunctionInput &data_p, DataChunk &o
 	std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int64_t>(bind_data.duration)));
 }
 
+struct RadioFlushBindData : public TableFunctionData {
+public:
+	RadioFlushBindData(Radio &radio, int64_t wait_timeout_ms)
+	    : wait_timeout_ms(wait_timeout_ms), returned_any_rows(false), radio(radio) {
+		// Copy all subscriptions so we don't have to worry about changes
+		// while scanning.
+		subscriptions_ = radio.GetSubscriptions();
+	}
+
+	size_t current_subscription_index = 0;
+
+	const int64_t wait_timeout_ms = 0;
+
+	bool returned_any_rows = false;
+
+	Radio &radio;
+
+	std::vector<std::shared_ptr<RadioSubscription>> subscriptions_;
+};
+
+static unique_ptr<FunctionData> RadioFlushBind(ClientContext &context, TableFunctionBindInput &input,
+                                               vector<LogicalType> &return_types, vector<string> &names) {
+	if (input.inputs.size() != 1) {
+		throw BinderException("radio_flush requires at least 1 argument");
+	}
+
+	auto duration = input.inputs[0].GetValue<interval_t>();
+
+	auto duration_milliseconds = Interval::GetMilli(duration);
+	if (duration_milliseconds < 0) {
+		throw BinderException("radio_flush requires the argument to be a non-negative interval");
+	}
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
+	names.emplace_back("all_messages_flushed");
+
+	return make_uniq<RadioFlushBindData>(GetRadio(), duration_milliseconds);
+}
+
+void RadioFlush(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	D_ASSERT(data_p.bind_data);
+	auto &bind_data = data_p.bind_data->CastNoConst<RadioFlushBindData>();
+
+	const auto now = std::chrono::steady_clock::now();
+	const auto finish_time = now + std::chrono::milliseconds(bind_data.wait_timeout_ms);
+
+	if (bind_data.returned_any_rows) {
+		// We already returned rows, so we don't need to do anything.
+		output.SetCardinality(0);
+		return;
+	}
+
+	bind_data.returned_any_rows = true;
+	output.SetCardinality(1);
+
+	for (auto &subscription : bind_data.subscriptions_) {
+		if (!subscription->flush_complete(finish_time)) {
+			FlatVector::GetData<bool>(output.data[0])[0] = 0;
+			return;
+		}
+	}
+
+	// Everything was flushed successfully, return a single row with true.
+	FlatVector::GetData<bool>(output.data[0])[0] = 1;
+}
+
 struct RadioListenBindData : public TableFunctionData {
 public:
 	RadioListenBindData(Radio &radio, bool wait_for_messages, int64_t wait_timeout_ms)
@@ -575,6 +641,9 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto listen_function =
 	    TableFunction("radio_listen", {LogicalType::BOOLEAN, LogicalType::INTERVAL}, RadioListen, RadioListenBind);
 	ExtensionUtil::RegisterFunction(instance, listen_function);
+
+	auto flush_function = TableFunction("radio_flush", {LogicalType::INTERVAL}, RadioFlush, RadioFlushBind);
+	ExtensionUtil::RegisterFunction(instance, flush_function);
 
 	auto subscriptions_function = TableFunction("radio_subscriptions", {}, RadioSubscriptions, RadioSubscriptionsBind);
 	ExtensionUtil::RegisterFunction(instance, subscriptions_function);

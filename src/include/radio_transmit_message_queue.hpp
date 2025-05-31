@@ -78,6 +78,8 @@ public:
 		rebuild_pending_by_send_time();
 	}
 
+	bool flush_complete(const std::chrono::steady_clock::time_point &timeout);
+
 private:
 	void rebuild_pending_by_send_time();
 

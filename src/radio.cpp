@@ -96,7 +96,7 @@ void Radio::NotifyHasMessages() {
 		std::lock_guard<std::mutex> lock(mtx);
 		has_any_messages_ = true;
 	}
-	cv.notify_one();
+	cv.notify_all();
 }
 
 bool Radio::WaitForMessages(std::chrono::milliseconds timeout) {
