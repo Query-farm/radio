@@ -55,11 +55,11 @@ static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, Table
 			if (params.receive_error_capacity <= 0) {
 				throw BinderException("radio_subscribe requires receive_error_capacity to be greater than 0");
 			}
-		} else if (loption == "transmit_message_capacity") {
-			params.transmit_message_capacity = kv.second.GetValue<int32_t>();
-			if (params.transmit_message_capacity <= 0) {
-				throw BinderException("radio_subscribe requires transmit_message_capacity to be greater than 0");
-			}
+			// } else if (loption == "transmit_message_capacity") {
+			// 	params.transmit_message_capacity = kv.second.GetValue<int32_t>();
+			// 	if (params.transmit_message_capacity <= 0) {
+			// 		throw BinderException("radio_subscribe requires transmit_message_capacity to be greater than 0");
+			// 	}
 		} else if (loption == "transmit_retry_initial_delay_ms") {
 			params.transmit_retry_initial_delay_ms = kv.second.GetValue<int32_t>();
 			if (params.transmit_retry_initial_delay_ms <= 0) {
@@ -244,14 +244,13 @@ void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, Data
 	FlatVector::GetData<uint64_t>(output.data[8])[0] = state.received_messages.odometer;
 
 	FlatVector::GetData<uint64_t>(output.data[9])[0] = state.transmit.odometer;
-	FlatVector::GetData<uint64_t>(output.data[10])[0] = state.transmit.dropped_unprocessed;
 
-	STORE_NULLABLE_TIMESTAMP(output.data[11], state.transmit.latest_queue_time);
-	STORE_NULLABLE_TIMESTAMP(output.data[12], state.transmit.latest_success_time);
-	STORE_NULLABLE_TIMESTAMP(output.data[13], state.transmit.latest_failure_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[10], state.transmit.latest_queue_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[11], state.transmit.latest_success_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[12], state.transmit.latest_failure_time);
 
-	FlatVector::GetData<uint64_t>(output.data[14])[0] = state.transmit.transmit_successes;
-	FlatVector::GetData<uint64_t>(output.data[15])[0] = state.transmit.transmit_failures;
+	FlatVector::GetData<uint64_t>(output.data[13])[0] = state.transmit.successes;
+	FlatVector::GetData<uint64_t>(output.data[14])[0] = state.transmit.failures;
 
 	output.SetCardinality(1);
 }
@@ -291,9 +290,6 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("transmit_messages_processed");
-
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
-	names.emplace_back("transmit_messages_dropped");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("transmit_last_queue_time");
@@ -558,7 +554,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	    TableFunction("radio_subscribe", {LogicalType::VARCHAR}, RadioSubscribe, RadioSubscribeBind);
 	subscribe_function.named_parameters["receive_message_capacity"] = LogicalType::INTEGER;
 	subscribe_function.named_parameters["receive_error_capacity"] = LogicalType::INTEGER;
-	subscribe_function.named_parameters["transmit_message_capacity"] = LogicalType::INTEGER;
+	// subscribe_function.named_parameters["transmit_message_capacity"] = LogicalType::INTEGER;
 
 	subscribe_function.named_parameters["transmit_retry_initial_delay_ms"] = LogicalType::INTEGER;
 	subscribe_function.named_parameters["transmit_retry_multiplier"] = LogicalType::DOUBLE;

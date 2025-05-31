@@ -183,10 +183,13 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 	names.emplace_back("creation_time");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
-	names.emplace_back("last_attempt_time");
+	names.emplace_back("last_attempt_start_time");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
+	names.emplace_back("last_attempt_end_time");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
-	names.emplace_back("sent");
+	names.emplace_back("state");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::TIMESTAMP_MS));
 	names.emplace_back("expire_time");
@@ -199,6 +202,9 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("message");
+
+	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
+	names.emplace_back("result");
 
 	auto subscription = GetRadio().GetSubscription(url);
 	if (!subscription) {
@@ -226,13 +232,36 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = message->id();
 	FlatVector::GetData<uint64_t>(output.data[1])[0] = message->creation_time();
-	STORE_NULLABLE_TIMESTAMP(output.data[2], state.last_transmit_time);
-	FlatVector::GetData<bool>(output.data[3])[0] = state.sent_;
-	FlatVector::GetData<uint64_t>(output.data[4])[0] = message->expire_time();
-	FlatVector::GetData<uint32_t>(output.data[5])[0] = message->max_attempts();
-	FlatVector::GetData<uint32_t>(output.data[6])[0] = state.try_count;
-	FlatVector::GetData<string_t>(output.data[7])[0] =
-	    StringVector::AddStringOrBlob(output.data[7], message->message());
+	STORE_NULLABLE_TIMESTAMP(output.data[2], state.last_attempt_start_time);
+	STORE_NULLABLE_TIMESTAMP(output.data[3], state.last_attempt_end_time);
+
+	std::string state_str;
+	switch (state.state) {
+	case RadioTransmitMessageProcessingState::PENDING:
+		state_str = "pending";
+		break;
+	case RadioTransmitMessageProcessingState::SENT:
+		state_str = "sent";
+		break;
+	case RadioTransmitMessageProcessingState::SENDING:
+		state_str = "sending";
+		break;
+	case RadioTransmitMessageProcessingState::RETRIES_EXHAUSTED:
+		state_str = "retries_exhausted";
+		break;
+	case RadioTransmitMessageProcessingState::TIME_EXPIRED:
+		state_str = "time_expired";
+		break;
+	}
+	FlatVector::GetData<string_t>(output.data[4])[0] = StringVector::AddStringOrBlob(output.data[4], state_str);
+
+	FlatVector::GetData<uint64_t>(output.data[5])[0] = message->send_expire_time();
+	FlatVector::GetData<uint32_t>(output.data[6])[0] = message->max_attempts();
+	FlatVector::GetData<uint32_t>(output.data[7])[0] = state.attempts_made;
+	FlatVector::GetData<string_t>(output.data[8])[0] =
+	    StringVector::AddStringOrBlob(output.data[8], message->message());
+	FlatVector::GetData<string_t>(output.data[9])[0] =
+	    StringVector::AddStringOrBlob(output.data[9], state.transmit_result);
 }
 
 struct RadioTransmitMessageAddBindData : public TableFunctionData {
@@ -332,8 +361,8 @@ RadioSubscription::RadioSubscription(const uint64_t id, const std::string &url,
                                      const RadioSubscriptionParameters &params, uint64_t creation_time, Radio &radio)
     : id_(id), url_(std::move(url)), creation_time_(creation_time), disabled_(false),
       received_messages_(params.receive_message_capacity), received_errors_(params.receive_error_capacity),
-      transmit_messages_(params.transmit_message_capacity, params.transmit_retry_initial_delay_ms,
-                         params.transmit_retry_multiplier, params.transmit_retry_max_delay_ms),
+      transmit_messages_(params.transmit_retry_initial_delay_ms, params.transmit_retry_multiplier,
+                         params.transmit_retry_max_delay_ms),
       radio_(radio) {
 	webSocket.setUrl(url_);
 	webSocket.setOnMessageCallback([this](const ix::WebSocketMessagePtr &msg) {
@@ -383,12 +412,11 @@ void RadioSubscription::add_transmit_messages(std::vector<RadioTransmitMessagePa
 		if (message_ids) {
 			message_ids[i] = message_id;
 		}
-		auto entry =
-		    std::make_shared<RadioTransmitMessage>(this->transmit_messages_, message_id, messages[i].message,
-		                                           current_time, messages[i].max_attempts, messages[i].expire_time);
+		auto entry = std::make_shared<RadioTransmitMessage>(message_id, messages[i].message, current_time,
+		                                                    messages[i].max_attempts, messages[i].expire_time);
 		items.emplace_back(std::move(entry));
 	}
-	transmit_messages_.push(items, current_time);
+	transmit_messages_.push(items);
 }
 
 } // namespace duckdb

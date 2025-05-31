@@ -9,6 +9,9 @@
   },
   "files.associations": {
     "vector": "cpp",
-    "map": "cpp"
+    "map": "cpp",
+    "algorithm": "cpp",
+    "deque": "cpp",
+    "queue": "cpp"
   }
 }
