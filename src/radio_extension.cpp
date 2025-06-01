@@ -568,6 +568,9 @@ static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("seen_count");
 
+	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
+	names.emplace_back("channel");
+
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("message");
 
@@ -602,8 +605,16 @@ void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, D
 
 	FlatVector::GetData<uint64_t>(output.data[4])[0] = message->receive_time();
 	FlatVector::GetData<uint64_t>(output.data[5])[0] = message->seen_count();
-	FlatVector::GetData<string_t>(output.data[6])[0] =
-	    StringVector::AddStringOrBlob(output.data[6], message->message());
+
+	if (message->channel().has_value()) {
+		FlatVector::GetData<string_t>(output.data[6])[0] =
+		    StringVector::AddStringOrBlob(output.data[6], *message->channel());
+	} else {
+		FlatVector::SetNull(output.data[6], 0, true);
+	}
+
+	FlatVector::GetData<string_t>(output.data[7])[0] =
+	    StringVector::AddStringOrBlob(output.data[7], message->message());
 }
 
 static void LoadInternal(DatabaseInstance &instance) {

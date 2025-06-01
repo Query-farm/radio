@@ -4,6 +4,7 @@
 namespace duckdb {
 
 struct RadioTransmitMessageParts {
+	std::optional<std::string> channel;
 	std::string message;
 	uint64_t expire_duration_ms;
 	uint32_t max_attempts;
@@ -31,14 +32,19 @@ struct RadioTransmitMessageState {
 // it has a body, the number of retries, and the time it was created.
 class RadioTransmitMessage {
 public:
-	explicit RadioTransmitMessage(const uint64_t id, const std::string &message, const uint64_t creation_time,
-	                              const uint32_t max_attempts, const uint64_t expire_duration_ms)
-	    : id_(id), message_(std::move(message)), creation_time_(creation_time), max_attempts_(max_attempts),
-	      expire_duration_ms_(expire_duration_ms) {
+	explicit RadioTransmitMessage(const uint64_t id, const std::optional<std::string> &channel,
+	                              const std::string &message, const uint64_t creation_time, const uint32_t max_attempts,
+	                              const uint64_t expire_duration_ms)
+	    : id_(id), channel_(std::move(channel)), message_(std::move(message)), creation_time_(creation_time),
+	      max_attempts_(max_attempts), expire_duration_ms_(expire_duration_ms) {
 		D_ASSERT(max_attempts > 0);
 		const auto now = std::chrono::steady_clock::now();
 		send_expire_time_ = now + std::chrono::milliseconds(expire_duration_ms);
 		state_.next_attempt_time = now;
+	}
+
+	const std::optional<std::string> &channel() const {
+		return channel_;
 	}
 
 	const std::string &message() const {
@@ -123,6 +129,7 @@ private:
 	// Store the ID of the message, it never changes and is relative to the subscription.
 	const uint64_t id_;
 
+	const std::optional<std::string> channel_;
 	const std::string message_;
 	const uint64_t creation_time_;
 	const uint32_t max_attempts_;

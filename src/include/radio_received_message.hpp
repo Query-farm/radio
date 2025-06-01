@@ -38,8 +38,10 @@ public:
 	}
 
 	explicit RadioReceivedMessage(RadioSubscription &subscription, const uint64_t id, MessageType &type,
-	                              const std::string &message, const uint64_t receive_time)
-	    : subscription_(subscription), id_(id), type_(type), message_(std::move(message)), receive_time_(receive_time) {
+	                              const std::optional<std::string> &channel, const std::string &message,
+	                              const uint64_t receive_time)
+	    : subscription_(subscription), id_(id), type_(type), channel_(channel), message_(std::move(message)),
+	      receive_time_(receive_time) {
 	}
 
 	void increment_seen_count() {
@@ -48,6 +50,10 @@ public:
 
 	const MessageType type() const {
 		return type_;
+	}
+
+	const std::optional<std::string> &channel() const {
+		return channel_;
 	}
 
 	const std::string &message() const {
@@ -77,6 +83,7 @@ private:
 
 	const MessageType type_;
 
+	const std::optional<std::string> channel_;
 	const std::string message_;
 	const uint64_t receive_time_;
 

@@ -19,6 +19,7 @@ struct RadioSubscriptionQueueState {
 
 struct RadioReceiveMessageParts {
 	RadioReceivedMessage::MessageType type;
+	std::optional<std::string> channel;
 	std::string message;
 	uint64_t receive_time;
 };

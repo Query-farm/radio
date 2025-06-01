@@ -116,14 +116,16 @@ void RadioSubscriptionTransmitMessagesDeleteFinished(ClientContext &context, Tab
 
 struct RadioSubscriptionReceivedMessageAddBindData : public TableFunctionData {
 	explicit RadioSubscriptionReceivedMessageAddBindData(Radio &radio, const string &url,
-	                                                     RadioReceivedMessage::MessageType type, const string &message)
-	    : radio_(radio), url_(url), message_type_(type), message_(message) {
+	                                                     RadioReceivedMessage::MessageType type, const string &channel,
+	                                                     const string &message)
+	    : radio_(radio), url_(url), message_type_(type), channel_(channel), message_(message) {
 	}
 
 	Radio &radio_;
 
 	const std::string url_;
 	const RadioReceivedMessage::MessageType message_type_;
+	const std::string channel_;
 	const std::string message_;
 
 	bool did_add = false;
@@ -135,25 +137,19 @@ static unique_ptr<FunctionData> RadioSubscriptionReceivedMessageAddBind(ClientCo
                                                                         vector<string> &names) {
 
 	if (input.inputs.size() != 3) {
-		throw BinderException("radio_add_message requires 3 arguments");
+		throw BinderException("radio_add_message requires 4 arguments");
 	}
 
-	auto url = input.inputs[0].GetValue<string>();
-	auto message_type = input.inputs[1].GetValue<string>();
-	auto message = input.inputs[2].GetValue<string>();
-
-	if (message_type != "message" && message_type != "error") {
-		throw BinderException("radio_add_message requires the second argument to be either 'message' or 'error'");
-	}
+	const auto url = input.inputs[0].GetValue<string>();
+	const auto message_type = input.inputs[1].GetValue<string>();
+	const auto channel = input.inputs[2].GetValue<string>();
+	const auto message = input.inputs[3].GetValue<string>();
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
-	return make_uniq<RadioSubscriptionReceivedMessageAddBindData>(GetRadio(), url,
-	                                                              message_type == "message"
-	                                                                  ? RadioReceivedMessage::MessageType::MESSAGE
-	                                                                  : RadioReceivedMessage::MessageType::ERROR,
-	                                                              message);
+	return make_uniq<RadioSubscriptionReceivedMessageAddBindData>(
+	    GetRadio(), url, RadioReceivedMessage::convert_to_message_type(message_type), channel, message);
 }
 
 void RadioSubscriptionReceivedMessageAdd(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -174,7 +170,7 @@ void RadioSubscriptionReceivedMessageAdd(ClientContext &context, TableFunctionIn
 
 	uint64_t message_id = 0;
 	vector<RadioReceiveMessageParts> parts;
-	parts.push_back({bind_data.message_type_, bind_data.message_, RadioCurrentTimeMillis()});
+	parts.push_back({bind_data.message_type_, bind_data.channel_, bind_data.message_, RadioCurrentTimeMillis()});
 	subscription->add_received_messages(parts, &message_id);
 
 	output.SetCardinality(1);
@@ -214,6 +210,9 @@ static unique_ptr<FunctionData> RadioSubscriptionReceivedMessagesBind(ClientCont
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("seen_count");
 
+	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
+	names.emplace_back("channel");
+
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("message");
 
@@ -242,8 +241,15 @@ void RadioSubscriptionReceivedMessages(ClientContext &context, TableFunctionInpu
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = message->id();
 	FlatVector::GetData<uint64_t>(output.data[1])[0] = message->receive_time();
 	FlatVector::GetData<uint64_t>(output.data[2])[0] = message->seen_count();
-	FlatVector::GetData<string_t>(output.data[3])[0] =
-	    StringVector::AddStringOrBlob(output.data[3], message->message());
+
+	if (message->channel().has_value()) {
+		FlatVector::GetData<string_t>(output.data[3])[0] =
+		    StringVector::AddStringOrBlob(output.data[3], message->channel().value());
+	} else {
+		FlatVector::SetNull(output.data[3], 0, true);
+	}
+	FlatVector::GetData<string_t>(output.data[4])[0] =
+	    StringVector::AddStringOrBlob(output.data[4], message->message());
 }
 
 struct RadioSubscriptionTransmitMessagesBindData : public TableFunctionData {
@@ -311,6 +317,9 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 	return_types.emplace_back(LogicalType(LogicalTypeId::UINTEGER));
 	names.emplace_back("try_count");
 
+	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
+	names.emplace_back("channel");
+
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("message");
 
@@ -364,22 +373,32 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 	FlatVector::GetData<uint32_t>(output.data[5])[0] = message->expire_duration_ms();
 	FlatVector::GetData<uint32_t>(output.data[6])[0] = message->max_attempts();
 	FlatVector::GetData<uint32_t>(output.data[7])[0] = state.attempts_made;
-	FlatVector::GetData<string_t>(output.data[8])[0] =
-	    StringVector::AddStringOrBlob(output.data[8], message->message());
+
+	if (message->channel().has_value()) {
+		FlatVector::GetData<string_t>(output.data[8])[0] =
+		    StringVector::AddStringOrBlob(output.data[8], message->channel().value());
+	} else {
+		FlatVector::SetNull(output.data[8], 0, true);
+	}
+
 	FlatVector::GetData<string_t>(output.data[9])[0] =
-	    StringVector::AddStringOrBlob(output.data[9], state.transmit_result);
+	    StringVector::AddStringOrBlob(output.data[9], message->message());
+	FlatVector::GetData<string_t>(output.data[10])[0] =
+	    StringVector::AddStringOrBlob(output.data[10], state.transmit_result);
 }
 
 struct RadioTransmitMessageAddBindData : public TableFunctionData {
-	explicit RadioTransmitMessageAddBindData(Radio &radio, const string &url, const string &message,
-	                                         const uint32_t max_attempts, const int64_t expire_duration_ms)
-	    : radio_(radio), url_(url), message_(message), max_attempts_(max_attempts),
+	explicit RadioTransmitMessageAddBindData(Radio &radio, const string &url, const std::optional<std::string> &channel,
+	                                         const string &message, const uint32_t max_attempts,
+	                                         const int64_t expire_duration_ms)
+	    : radio_(radio), url_(url), channel_(channel), message_(message), max_attempts_(max_attempts),
 	      expire_duration_ms_(expire_duration_ms) {
 	}
 
 	Radio &radio_;
 
 	const std::string url_;
+	const std::optional<std::string> channel_;
 	const std::string message_;
 	const uint32_t max_attempts_;
 	const int64_t expire_duration_ms_;
@@ -390,24 +409,29 @@ struct RadioTransmitMessageAddBindData : public TableFunctionData {
 static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &context, TableFunctionBindInput &input,
                                                             vector<LogicalType> &return_types, vector<string> &names) {
 
-	if (input.inputs.size() != 4) {
-		throw BinderException("radio_transmit_message requires 4 arguments");
+	if (input.inputs.size() != 5) {
+		throw BinderException("radio_transmit_message requires 5 arguments");
 	}
 
-	auto url = input.inputs[0].GetValue<string>();
-	auto message = input.inputs[1].GetValue<string>();
-	auto max_attempts = input.inputs[2].GetValue<int32_t>();
+	const auto url = input.inputs[0].GetValue<string>();
+	std::optional<std::string> channel = std::nullopt;
+	if (!input.inputs[1].IsNull()) {
+		channel = input.inputs[1].GetValue<string>();
+	}
+	const auto message = input.inputs[2].GetValue<string>();
+	const auto max_attempts = input.inputs[3].GetValue<int32_t>();
 	if (max_attempts <= 0) {
 		throw InvalidInputException("max_attempts must be a positive integer");
 	}
-	auto expire_time = input.inputs[3].GetValue<interval_t>();
+	const auto expire_time = input.inputs[4].GetValue<interval_t>();
 
-	auto real_expire_time = Interval::GetMilli(expire_time);
+	const auto real_expire_time = Interval::GetMilli(expire_time);
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
-	return make_uniq<RadioTransmitMessageAddBindData>(GetRadio(), url, message, max_attempts, real_expire_time);
+	return make_uniq<RadioTransmitMessageAddBindData>(GetRadio(), url, channel, message, max_attempts,
+	                                                  real_expire_time);
 }
 
 void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -466,10 +490,10 @@ void RadioSubscriptionAddFunctions(DatabaseInstance &instance) {
 	                  RadioSubscriptionTransmitMessagesBind);
 	ExtensionUtil::RegisterFunction(instance, transmit_messages_function);
 
-	auto transmit_message_add_function =
-	    TableFunction("radio_transmit_message",
-	                  {LogicalType::VARCHAR, LogicalType::BLOB, LogicalType::INTEGER, LogicalType::INTERVAL},
-	                  RadioTransmitMessageAdd, RadioTransmitMessageAddBind);
+	auto transmit_message_add_function = TableFunction(
+	    "radio_transmit_message",
+	    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BLOB, LogicalType::INTEGER, LogicalType::INTERVAL},
+	    RadioTransmitMessageAdd, RadioTransmitMessageAddBind);
 	ExtensionUtil::RegisterFunction(instance, transmit_message_add_function);
 }
 
@@ -484,15 +508,16 @@ RadioSubscription::RadioSubscription(const uint64_t id, const std::string &url,
 	webSocket.setOnMessageCallback([this](const ix::WebSocketMessagePtr &msg) {
 		const auto now = RadioCurrentTimeMillis();
 		if (msg->type == ix::WebSocketMessageType::Message) {
-			this->add_received_messages({{RadioReceivedMessage::MessageType::MESSAGE, msg->str, now}});
+			this->add_received_messages({{RadioReceivedMessage::MessageType::MESSAGE, std::nullopt, msg->str, now}});
 		} else if (msg->type == ix::WebSocketMessageType::Open) {
-			this->add_received_messages({{RadioReceivedMessage::MessageType::CONNECTION, "", now}});
+			this->add_received_messages({{RadioReceivedMessage::MessageType::CONNECTION, std::nullopt, "", now}});
 			this->activation_time_ = now;
 		} else if (msg->type == ix::WebSocketMessageType::Close) {
-			this->add_received_messages({{RadioReceivedMessage::MessageType::DISCONNECTION, "", now}});
+			this->add_received_messages({{RadioReceivedMessage::MessageType::DISCONNECTION, std::nullopt, "", now}});
 			this->activation_time_ = 0;
 		} else if (msg->type == ix::WebSocketMessageType::Error) {
-			this->add_received_messages({{RadioReceivedMessage::MessageType::ERROR, msg->errorInfo.reason, now}});
+			this->add_received_messages(
+			    {{RadioReceivedMessage::MessageType::ERROR, std::nullopt, msg->errorInfo.reason, now}});
 		}
 	});
 
@@ -518,8 +543,8 @@ void RadioSubscription::add_received_messages(std::vector<RadioReceiveMessagePar
 		if (message_ids) {
 			message_ids[i] = message_id;
 		}
-		auto entry = std::make_shared<RadioReceivedMessage>(*this, message_id, messages[i].type, messages[i].message,
-		                                                    messages[i].receive_time);
+		auto entry = std::make_shared<RadioReceivedMessage>(*this, message_id, messages[i].type, messages[i].channel,
+		                                                    messages[i].message, messages[i].receive_time);
 
 		items.push_back(entry);
 	}
@@ -537,8 +562,9 @@ void RadioSubscription::add_transmit_messages(std::vector<RadioTransmitMessagePa
 		if (message_ids) {
 			message_ids[i] = message_id;
 		}
-		auto entry = std::make_shared<RadioTransmitMessage>(message_id, messages[i].message, current_time,
-		                                                    messages[i].max_attempts, messages[i].expire_duration_ms);
+		auto entry =
+		    std::make_shared<RadioTransmitMessage>(message_id, messages[i].channel, messages[i].message, current_time,
+		                                           messages[i].max_attempts, messages[i].expire_duration_ms);
 		items.emplace_back(std::move(entry));
 	}
 	transmit_messages_.push(items);
