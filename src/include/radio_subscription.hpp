@@ -7,7 +7,7 @@
 #include "radio.hpp"
 #include "radio_subscription_parameters.hpp"
 #include <IXWebSocket.h>
-
+#include "redis_subscription.hpp"
 namespace duckdb {
 
 class Radio;
@@ -25,10 +25,17 @@ struct RadioReceiveMessageParts {
 };
 
 class RadioSubscription {
+private:
+	enum class UrlType { WebSocket, Redis, Unknown };
+	static UrlType detect_url_type(const std::string &url);
+	static std::string normalize_redis_url(const std::string &url);
 
 public:
 	explicit RadioSubscription(const uint64_t id, const std::string &url, const RadioSubscriptionParameters &params,
 	                           uint64_t creation_time, Radio &radio);
+
+	void start(std::shared_ptr<RadioSubscription> &self);
+	void stop();
 
 	~RadioSubscription();
 
@@ -57,6 +64,10 @@ public:
 		return received_messages_.size();
 	}
 
+	uint64_t receive_has_unseen() {
+		return received_messages_.has_unseen();
+	}
+
 	uint64_t creation_time() const {
 		return creation_time_;
 	}
@@ -76,12 +87,36 @@ public:
 		return disabled_;
 	}
 
+	bool has_unseen() const {
+		return received_messages_.has_unseen();
+	}
+
 	void set_disabled(bool disabled) {
-		if (disabled) {
-			webSocket.stop();
-		} else {
-			webSocket.start();
-		}
+		// if (disabled) {
+		// 	if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(connection_)) {
+		// 		auto &webSocket = std::get<std::unique_ptr<ix::WebSocket>>(connection_);
+		// 		webSocket->stop();
+		// 	} else if (std::holds_alternative<RedisSubscription>(connection_)) {
+		// 		auto &redis = std::get<RedisSubscription>(connection_);
+		// 		redis.subscriber->unsubscribe();
+		// 	}
+		// } else {
+
+		// 	// if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(connection_)) {
+		// 	// 	auto &webSocket = std::get<std::unique_ptr<ix::WebSocket>>(connection_);
+		// 	// 	webSocket->start();
+		// 	// } else if (std::holds_alternative<RedisSubscription>(connection_)) {
+		// 	// 	auto &redis = std::get<RedisSubscription>(connection_);
+		// 	// 	D_ASSERT(channel_name_.has_value());
+		// 	// 	redis.subscriber->subscribe(channel_name_.value());
+
+		// 	// 	if (reader_thread_->joinable()) {
+		// 	// 		reader_thread_->join();
+		// 	// 	}
+
+		// 	// 	reader_thread_ = std::thread([&redis] { redis.subscriber->consume(); });
+		// 	// }
+		// }
 		disabled_ = disabled;
 	}
 
@@ -106,11 +141,15 @@ public:
 		return transmit_messages_.flush_complete(timeout);
 	}
 
-private:
-	void senderLoop();
+	std::variant<std::unique_ptr<ix::WebSocket>, RedisSubscription> connection;
 
+	std::atomic<uint64_t> activation_time_ {0};
+
+private:
 	// Store the ID of the subscription, it never changes.
 	const uint64_t id_;
+
+	const UrlType url_type_;
 
 	// Store the URL of the subscription.
 	const std::string url_;
@@ -127,7 +166,6 @@ private:
 	// This state may need to be protected by a mutex.
 
 	// The time the subscription was activated.
-	uint64_t activation_time_ {0};
 
 	// Indicate if this subscription should be disabled.
 	bool disabled_ = false;
@@ -139,9 +177,7 @@ private:
 
 	Radio &radio_;
 
-	ix::WebSocket webSocket;
-
-	std::thread sender_thread_;
+	bool is_stopped_ = false;
 };
 
 void RadioSubscriptionAddFunctions(DatabaseInstance &instance);

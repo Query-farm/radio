@@ -5,6 +5,12 @@
                         "features": [
                                 "ssl"
                         ]
+                },
+                {
+                        "name": "redis-plus-plus",
+                        "features": [
+                                "tls"
+                        ]
                 }
         ],
         "vcpkg-configuration": {

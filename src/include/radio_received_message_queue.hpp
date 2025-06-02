@@ -1,6 +1,9 @@
 #pragma once
 #include "radio_extension.hpp"
 #include "radio_received_message.hpp"
+#include "redis_subscription.hpp"
+#include <IXWebSocket.h>
+#include <iostream>
 
 namespace duckdb {
 
@@ -14,95 +17,42 @@ struct RadioReceivedMessageQueueState {
 
 class RadioReceivedMessageQueue {
 public:
-	RadioReceivedMessageQueue(size_t capacity) : capacity_(capacity) {
+	RadioReceivedMessageQueue(RadioSubscription &subscription, size_t capacity)
+	    : subscription_(subscription), capacity_(capacity) {
 	}
 
-	void push(const std::vector<std::shared_ptr<RadioReceivedMessage>> &items) {
-		std::lock_guard<std::mutex> lock(mtx);
+	void push(const std::vector<std::shared_ptr<RadioReceivedMessage>> &items);
 
-		state_.odometer += items.size();
-		for (auto &item : items) {
-			if (queue_.size() >= capacity_) {
-				auto &front = queue_.front();
-				if (front->seen_count() == 0) {
-					state_.dropped_unseen++;
-				}
-				queue_.pop_front(); // Drop oldest
-			}
-			state_.latest_receive_time =
-			    item->receive_time() > state_.latest_receive_time ? item->receive_time() : state_.latest_receive_time;
-			queue_.push_back(item);
-		}
-	}
+	std::shared_ptr<RadioReceivedMessage> pop();
 
-	std::shared_ptr<RadioReceivedMessage> pop() {
-		std::lock_guard<std::mutex> lock(mtx);
-		if (queue_.empty()) {
-			return nullptr;
-		}
-		auto item = queue_.front();
-		if (item->seen_count() == 0) {
-			state_.dropped_unseen++;
-		}
-		queue_.pop_front();
-		return item;
-	}
+	std::vector<std::shared_ptr<RadioReceivedMessage>> snapshot() const;
 
-	std::vector<std::shared_ptr<RadioReceivedMessage>> snapshot() const {
-		std::lock_guard<std::mutex> lock(mtx);
-		for (const auto &item : queue_) {
-			item->increment_seen_count();
-		}
-		return std::vector<std::shared_ptr<RadioReceivedMessage>>(queue_.begin(), queue_.end());
-	}
+	void resize(uint64_t new_capacity);
 
-	void resize(uint64_t new_capacity) {
-		std::lock_guard<std::mutex> lock(mtx);
-		capacity_ = new_capacity;
-		while (queue_.size() > capacity_) {
-			auto item = queue_.front();
-			if (item->seen_count() == 0) {
-				state_.dropped_unseen++;
-			}
-			queue_.pop_front();
-		}
-	}
+	void remove_by_ids(const std::unordered_set<uint64_t> &ids_to_remove);
 
-	void remove_by_ids(const std::unordered_set<uint64_t> &ids_to_remove) {
-		std::lock_guard<std::mutex> lock(mtx);
-		queue_.erase(std::remove_if(queue_.begin(), queue_.end(),
-		                            [&](const std::shared_ptr<RadioReceivedMessage> &item) {
-			                            return ids_to_remove.count(item->id()) > 0;
-		                            }),
-		             queue_.end());
-	}
+	uint64_t size() const;
 
-	uint64_t size() const {
-		std::lock_guard<std::mutex> lock(mtx);
-		return queue_.size();
-	}
+	bool has_unseen() const;
 
-	uint64_t capacity() const {
-		std::lock_guard<std::mutex> lock(mtx);
-		return capacity_;
-	}
+	uint64_t capacity() const;
 
-	bool empty() const {
-		std::lock_guard<std::mutex> lock(mtx);
-		return queue_.empty();
-	}
+	bool empty() const;
 
-	void clear() {
-		std::lock_guard<std::mutex> lock(mtx);
-		queue_.clear();
-	}
+	void clear();
 
-	RadioReceivedMessageQueueState state() const {
-		std::lock_guard<std::mutex> lock(mtx);
-		return state_;
-	}
+	void stop();
+
+	void start();
+
+	RadioReceivedMessageQueueState state() const;
+
+	void readerLoop();
 
 private:
+	atomic<bool> stop_flag_ {false};
+	RadioSubscription &subscription_;
+
 	uint64_t capacity_;
 
 	RadioReceivedMessageQueueState state_;
@@ -110,5 +60,6 @@ private:
 	std::deque<std::shared_ptr<RadioReceivedMessage>> queue_;
 
 	mutable std::mutex mtx;
+	std::thread reader_thread_;
 };
-}
+} // namespace duckdb

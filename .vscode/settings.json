@@ -13,6 +13,9 @@
     "algorithm": "cpp",
     "deque": "cpp",
     "queue": "cpp",
-    "__config": "cpp"
+    "__config": "cpp",
+    "variant": "cpp",
+    "__bit_reference": "cpp",
+    "unordered_map": "cpp"
   }
 }

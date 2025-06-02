@@ -1,5 +1,7 @@
 #include "radio_transmit_message.hpp"
 #include "radio_transmit_message_queue.hpp"
+#include "radio_subscription.hpp"
+#include <sw/redis++/redis++.h>
 
 namespace duckdb {
 
@@ -68,7 +70,7 @@ std::shared_ptr<RadioTransmitMessage> RadioTransmitMessageQueue::wait_and_pop() 
 	}
 }
 
-void RadioTransmitMessageQueue::senderLoop(ix::WebSocket &websocket) {
+void RadioTransmitMessageQueue::senderLoop() {
 	while (!stop_flag_) {
 		std::unique_lock<std::mutex> lock(mtx);
 
@@ -90,15 +92,40 @@ void RadioTransmitMessageQueue::senderLoop(ix::WebSocket &websocket) {
 			next_msg->update_state(RadioTransmitMessageProcessingState::SENDING, RadioCurrentTimeMillis(),
 			                       retry_initial_delay_ms_, retry_multiplier_, retry_max_delay_ms_, "");
 
-			auto send_result = websocket.sendBinary(next_msg->message());
+			if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(subscription_.connection)) {
+				auto &websocket = std::get<std::unique_ptr<ix::WebSocket>>(subscription_.connection);
+				auto send_result = websocket->sendBinary(next_msg->message());
 
-			next_msg->update_state(send_result.success ? RadioTransmitMessageProcessingState::SENT
-			                                           : RadioTransmitMessageProcessingState::PENDING,
-			                       RadioCurrentTimeMillis(), retry_initial_delay_ms_, retry_multiplier_,
-			                       retry_max_delay_ms_, "");
+				next_msg->update_state(send_result.success ? RadioTransmitMessageProcessingState::SENT
+				                                           : RadioTransmitMessageProcessingState::PENDING,
+				                       RadioCurrentTimeMillis(), retry_initial_delay_ms_, retry_multiplier_,
+				                       retry_max_delay_ms_, "");
+			} else if (std::holds_alternative<RedisSubscription>(subscription_.connection)) {
+				auto &redis = std::get<RedisSubscription>(subscription_.connection);
+				D_ASSERT(next_msg->channel().has_value());
+				try {
+					redis.redis->publish(next_msg->channel().value(), next_msg->message());
+				} catch (const sw::redis::TimeoutError &e) {
+					next_msg->update_state(RadioTransmitMessageProcessingState::PENDING, RadioCurrentTimeMillis(),
+					                       retry_initial_delay_ms_, retry_multiplier_, retry_max_delay_ms_, "timeout");
+
+				} catch (const sw::redis::ClosedError &e) {
+					next_msg->update_state(RadioTransmitMessageProcessingState::PENDING, RadioCurrentTimeMillis(),
+					                       retry_initial_delay_ms_, retry_multiplier_, retry_max_delay_ms_,
+					                       "connection closed");
+
+					// maybe reconnect
+				} catch (const sw::redis::Error &e) {
+					next_msg->update_state(RadioTransmitMessageProcessingState::PENDING, RadioCurrentTimeMillis(),
+					                       retry_initial_delay_ms_, retry_multiplier_, retry_max_delay_ms_,
+					                       string("Redis error:") + e.what());
+				}
+			} else {
+				throw std::runtime_error("Unsupported connection type for sending messages");
+			}
 			// The update state will calculate the next attempt time based on the retry logic, if
 			// necessary.
-			if (!send_result.success && next_msg->state().state == RadioTransmitMessageProcessingState::PENDING) {
+			if (next_msg->state().state == RadioTransmitMessageProcessingState::PENDING) {
 				// If the send failed, we need to requeue it for the next attempt.
 				lock.lock();
 				pending_by_send_time_.push(next_msg);
@@ -214,6 +241,18 @@ bool RadioTransmitMessageQueue::flush_complete(const std::chrono::steady_clock::
 	bool success =
 	    pending_by_send_cv_.wait_until(lock, timeout, [&]() { return stop_flag_ || pending_by_send_time_.empty(); });
 	return success;
+}
+
+void RadioTransmitMessageQueue::start() {
+	sender_thread_ = std::thread([this] { this->senderLoop(); });
+}
+
+void RadioTransmitMessageQueue::stop() {
+	stop_flag_ = true;
+	pending_by_send_cv_.notify_all();
+	if (sender_thread_.joinable()) {
+		sender_thread_.join();
+	}
 }
 
 } // namespace duckdb

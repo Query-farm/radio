@@ -465,9 +465,6 @@ static unique_ptr<FunctionData> RadioListenBind(ClientContext &context, TableFun
 	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
 	names.emplace_back("subscription_url");
 
-	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
-	names.emplace_back("messages_pending");
-
 	return make_uniq<RadioListenBindData>(GetRadio(), wait_for_messages, duration_milliseconds);
 }
 
@@ -475,12 +472,11 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 	D_ASSERT(data_p.bind_data);
 	auto &bind_data = data_p.bind_data->CastNoConst<RadioListenBindData>();
 
-	auto process_subscription_index = [&]() -> bool {
+	auto check_subscriptions_for_messages = [&]() -> bool {
 		while (bind_data.current_subscription_index < bind_data.subscriptions_.size()) {
 			auto &subscription = bind_data.subscriptions_[bind_data.current_subscription_index++];
 
-			auto messages_pending = subscription->receive_queue_size();
-			if (messages_pending == 0) {
+			if (!subscription->has_unseen()) {
 				continue;
 			}
 
@@ -488,7 +484,6 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 			FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
 			FlatVector::GetData<string_t>(output.data[1])[0] =
 			    StringVector::AddStringOrBlob(output.data[1], subscription->url());
-			FlatVector::GetData<uint64_t>(output.data[2])[0] = messages_pending;
 			bind_data.returned_any_rows = true;
 			return true;
 		}
@@ -497,7 +492,7 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 
 	// If we're not waiting or we just finished waiting, try to process subscriptions immediately
 	if (!bind_data.wait_for_messages || bind_data.last_loop_after_waiting) {
-		if (!process_subscription_index()) {
+		if (!check_subscriptions_for_messages()) {
 			output.SetCardinality(0);
 		}
 		return;
@@ -505,7 +500,7 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 
 	// Loop through all subscriptions, if we any have messages they will
 	// be indicated in bind_data.returned_any_rows
-	if (process_subscription_index()) {
+	if (check_subscriptions_for_messages()) {
 		return;
 	}
 
@@ -524,7 +519,7 @@ void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &
 			// Loop through all subscriptions again.
 			bind_data.current_subscription_index = 0;
 			bind_data.last_loop_after_waiting = true;
-			process_subscription_index();
+			check_subscriptions_for_messages();
 			return;
 		}
 	}

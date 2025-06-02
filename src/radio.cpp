@@ -29,6 +29,7 @@ std::shared_ptr<RadioSubscription> Radio::AddSubscription(const std::string &url
 	}
 	auto new_id = subscription_id_++;
 	subscriptions_[new_id] = std::make_shared<RadioSubscription>(new_id, url, params, creation_time, *this);
+	subscriptions_[new_id]->start(subscriptions_[new_id]);
 	return subscriptions_[new_id];
 }
 
@@ -38,6 +39,7 @@ void Radio::RemoveSubscription(std::shared_ptr<RadioSubscription> subscription) 
 	auto it = subscriptions_.find(subscription->id());
 	if (it != subscriptions_.end()) {
 		auto removed = std::move(it->second);
+		removed->stop();
 		subscriptions_.erase(it);
 	}
 }
@@ -48,6 +50,7 @@ std::shared_ptr<RadioSubscription> Radio::RemoveSubscription(const uint64_t id) 
 	auto it = subscriptions_.find(id);
 	if (it != subscriptions_.end()) {
 		auto removed = std::move(it->second);
+		removed->stop();
 		subscriptions_.erase(it);
 		return removed;
 	}
@@ -101,6 +104,7 @@ void Radio::NotifyHasMessages() {
 
 bool Radio::WaitForMessages(std::chrono::milliseconds timeout) {
 	std::unique_lock<std::mutex> lock(mtx);
+	has_any_messages_ = false;
 	bool success = cv.wait_for(lock, timeout, [this] { return has_any_messages_; });
 
 	return success;

@@ -497,42 +497,146 @@ void RadioSubscriptionAddFunctions(DatabaseInstance &instance) {
 	ExtensionUtil::RegisterFunction(instance, transmit_message_add_function);
 }
 
+RadioSubscription::UrlType RadioSubscription::detect_url_type(const std::string &url) {
+	if (url.rfind("ws://", 0) == 0) {
+		return RadioSubscription::UrlType::WebSocket;
+	} else if (url.rfind("redis-", 0) == 0) {
+		return RadioSubscription::UrlType::Redis;
+	}
+	return RadioSubscription::UrlType::Unknown;
+}
+
+// Helper function to get query parameter from URL
+static std::string get_query_param(const std::string &url, const std::string &param) {
+	// Find the start of query string (after '?')
+	auto pos = url.find('?');
+	if (pos == std::string::npos) {
+		return {};
+	}
+
+	std::string query = url.substr(pos + 1);
+
+	size_t start = 0;
+	while (start < query.size()) {
+		auto end = query.find('&', start);
+		if (end == std::string::npos)
+			end = query.size();
+
+		auto eq = query.find('=', start);
+		if (eq != std::string::npos && eq < end) {
+			std::string key = query.substr(start, eq - start);
+			std::string value = query.substr(eq + 1, end - eq - 1);
+			if (key == param) {
+				return value;
+			}
+		}
+		start = end + 1;
+	}
+	return {};
+}
+
+std::string RadioSubscription::normalize_redis_url(const std::string &url) {
+	RadioSubscription::UrlType type = RadioSubscription::detect_url_type(url);
+	switch (type) {
+	case RadioSubscription::UrlType::Redis:
+		// Convert redis-tcp:// to tcp://
+		return url.substr(std::string("redis-").size());
+	default:
+		return {};
+	}
+}
+
+std::string remove_query_param(const std::string &url, const std::string &param_name) {
+	std::string::size_type question_mark_pos = url.find('?');
+	if (question_mark_pos == std::string::npos) {
+		return url; // No query string
+	}
+
+	std::string base = url.substr(0, question_mark_pos);
+	std::string query = url.substr(question_mark_pos + 1);
+
+	std::string result;
+	bool first = true;
+
+	std::string::size_type start = 0;
+	const std::string prefix = param_name + "=";
+
+	while (start < query.size()) {
+		auto end = query.find('&', start);
+		if (end == std::string::npos)
+			end = query.size();
+
+		auto param = query.substr(start, end - start);
+		if (param.rfind(prefix, 0) != 0) {
+			if (first) {
+				result += '?';
+				first = false;
+			} else {
+				result += '&';
+			}
+			result += param;
+		}
+
+		start = end + 1;
+	}
+
+	return base + result;
+}
+
 RadioSubscription::RadioSubscription(const uint64_t id, const std::string &url,
                                      const RadioSubscriptionParameters &params, uint64_t creation_time, Radio &radio)
-    : id_(id), url_(std::move(url)), creation_time_(creation_time), disabled_(false),
-      received_messages_(params.receive_message_capacity),
-      transmit_messages_(params.transmit_retry_initial_delay_ms, params.transmit_retry_multiplier,
+    : id_(id), url_type_(detect_url_type(url)), url_(std::move(url)), creation_time_(creation_time), disabled_(false),
+      received_messages_(*this, params.receive_message_capacity),
+      transmit_messages_(*this, params.transmit_retry_initial_delay_ms, params.transmit_retry_multiplier,
                          params.transmit_retry_max_delay_ms),
       radio_(radio) {
-	webSocket.setUrl(url_);
-	webSocket.setOnMessageCallback([this](const ix::WebSocketMessagePtr &msg) {
-		const auto now = RadioCurrentTimeMillis();
-		if (msg->type == ix::WebSocketMessageType::Message) {
-			this->add_received_messages({{RadioReceivedMessage::MessageType::MESSAGE, std::nullopt, msg->str, now}});
-		} else if (msg->type == ix::WebSocketMessageType::Open) {
-			this->add_received_messages({{RadioReceivedMessage::MessageType::CONNECTION, std::nullopt, "", now}});
-			this->activation_time_ = now;
-		} else if (msg->type == ix::WebSocketMessageType::Close) {
-			this->add_received_messages({{RadioReceivedMessage::MessageType::DISCONNECTION, std::nullopt, "", now}});
-			this->activation_time_ = 0;
-		} else if (msg->type == ix::WebSocketMessageType::Error) {
-			this->add_received_messages(
-			    {{RadioReceivedMessage::MessageType::ERROR, std::nullopt, msg->errorInfo.reason, now}});
+}
+
+void RadioSubscription::start(std::shared_ptr<RadioSubscription> &self) {
+	if (url_type_ == UrlType::WebSocket) {
+		auto webSocket = std::make_unique<ix::WebSocket>();
+		webSocket->setUrl(url_);
+		webSocket->start();
+		connection = std::move(webSocket);
+	} else if (url_type_ == UrlType::Redis) {
+		auto redis_url = normalize_redis_url(url_);
+		if (redis_url.empty()) {
+			throw InvalidInputException("Invalid Redis URL: " + url_);
 		}
-	});
 
-	// FIXME: need a way to handle transmit messages in a seperate thread.
-	sender_thread_ = std::thread([this] { this->transmit_messages_.senderLoop(this->webSocket); });
+		redis_url = remove_query_param(redis_url, "channel");
 
-	webSocket.start();
+		auto parsed_channel_name_ = get_query_param(url_, "channel");
+		if (parsed_channel_name_.empty()) {
+			throw InvalidInputException("No channel specified in Redis URL: " + url_);
+		}
+
+		auto redis_client = std::make_unique<sw::redis::Redis>(redis_url);
+
+		this->activation_time_ = RadioCurrentTimeMillis();
+		connection = RedisSubscription {std::move(redis_client), nullptr, parsed_channel_name_};
+	} else {
+		throw InvalidInputException("Unsupported URL type for RadioSubscription: " + url_);
+	}
+	this->transmit_messages_.start();
+	this->received_messages_.start();
+}
+
+void RadioSubscription::stop() {
+	if (is_stopped_) {
+		return;
+	}
+	is_stopped_ = true;
+	transmit_messages_.stop();
+	received_messages_.stop();
+	if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(connection)) {
+		auto &webSocket = std::get<std::unique_ptr<ix::WebSocket>>(connection);
+		webSocket->stop();
+	}
 }
 
 RadioSubscription::~RadioSubscription() {
-	transmit_messages_.stop();
-	if (sender_thread_.joinable()) {
-		sender_thread_.join();
-	}
-	webSocket.stop();
+	stop();
 }
 
 void RadioSubscription::add_received_messages(std::vector<RadioReceiveMessageParts> messages, uint64_t *message_ids) {
