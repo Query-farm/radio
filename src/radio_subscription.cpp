@@ -592,7 +592,7 @@ RadioSubscription::RadioSubscription(const uint64_t id, const std::string &url,
       radio_(radio) {
 }
 
-void RadioSubscription::start(std::shared_ptr<RadioSubscription> &self) {
+void RadioSubscription::start() {
 	if (url_type_ == UrlType::WebSocket) {
 		auto webSocket = std::make_unique<ix::WebSocket>();
 		webSocket->setUrl(url_);
@@ -666,9 +666,7 @@ void RadioSubscription::add_transmit_messages(std::vector<RadioTransmitMessagePa
 		if (message_ids) {
 			message_ids[i] = message_id;
 		}
-		auto entry =
-		    std::make_shared<RadioTransmitMessage>(message_id, messages[i].channel, messages[i].message, current_time,
-		                                           messages[i].max_attempts, messages[i].expire_duration_ms);
+		auto entry = std::make_shared<RadioTransmitMessage>(message_id, current_time, messages[i]);
 		items.emplace_back(std::move(entry));
 	}
 	transmit_messages_.push(items);

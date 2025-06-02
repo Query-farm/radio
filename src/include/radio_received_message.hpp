@@ -7,40 +7,28 @@ class RadioSubscription;
 
 class RadioReceivedMessage {
 public:
-	enum MessageType { MESSAGE, ERROR, CONNECTION, DISCONNECTION };
+	enum class MessageType { Message, Error, Connection, Disconnection };
 
 	static MessageType convert_to_message_type(const std::string &type) {
-		if (type == "message") {
-			return MESSAGE;
-		} else if (type == "error") {
-			return ERROR;
-		} else if (type == "connection") {
-			return CONNECTION;
-		} else if (type == "disconnection") {
-			return DISCONNECTION;
+		static const std::unordered_map<std::string, MessageType> map = {{"message", MessageType::Message},
+		                                                                 {"error", MessageType::Error},
+		                                                                 {"connection", MessageType::Connection},
+		                                                                 {"disconnection", MessageType::Disconnection}};
+		auto it = map.find(type);
+		if (it == map.end()) {
+			throw InvalidInputException("Invalid message type: " + type);
 		}
-		throw InvalidInputException("Invalid message type: " + type);
+		return it->second;
 	}
 
-	static uint16_t message_type_to_enum_index(MessageType type) {
-		switch (type) {
-		case MESSAGE:
-			return 0;
-		case ERROR:
-			return 1;
-		case CONNECTION:
-			return 2;
-		case DISCONNECTION:
-			return 3;
-		default:
-			throw InvalidInputException("Invalid message type for code conversion");
-		}
+	static uint16_t message_type_to_enum_index(const MessageType type) {
+		return static_cast<uint16_t>(type);
 	}
 
-	explicit RadioReceivedMessage(RadioSubscription &subscription, const uint64_t id, MessageType &type,
-	                              const std::optional<std::string> &channel, const std::string &message,
+	explicit RadioReceivedMessage(RadioSubscription &subscription, const uint64_t id, const MessageType type,
+	                              const std::optional<std::string> channel, const std::string &message,
 	                              const uint64_t receive_time)
-	    : subscription_(subscription), id_(id), type_(type), channel_(channel), message_(std::move(message)),
+	    : subscription_(subscription), id_(id), type_(type), channel_(std::move(channel)), message_(std::move(message)),
 	      receive_time_(receive_time) {
 	}
 
@@ -48,31 +36,31 @@ public:
 		seen_count_.fetch_add(1);
 	}
 
-	const MessageType type() const {
+	[[nodiscard]] MessageType type() const {
 		return type_;
 	}
 
-	const std::optional<std::string> &channel() const {
+	[[nodiscard]] const std::optional<std::string> &channel() const {
 		return channel_;
 	}
 
-	const std::string &message() const {
+	[[nodiscard]] const std::string &message() const {
 		return message_;
 	}
 
-	uint64_t receive_time() const {
+	[[nodiscard]] uint64_t receive_time() const {
 		return receive_time_;
 	}
 
-	uint64_t seen_count() const {
+	[[nodiscard]] uint64_t seen_count() const {
 		return seen_count_.load();
 	}
 
-	uint64_t id() const {
+	[[nodiscard]] uint64_t id() const {
 		return id_;
 	}
 
-	RadioSubscription &subscription() const {
+	[[nodiscard]] RadioSubscription &subscription() const {
 		return subscription_;
 	}
 

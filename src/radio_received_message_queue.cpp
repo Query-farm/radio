@@ -129,7 +129,7 @@ void RadioReceivedMessageQueue::readerLoop() {
 		redis.subscriber->on_message([this](std::string channel, std::string msg) {
 			const auto now = RadioCurrentTimeMillis();
 			this->subscription_.add_received_messages(
-			    {{RadioReceivedMessage::MessageType::MESSAGE, channel, msg, now}});
+			    {{RadioReceivedMessage::MessageType::Message, channel, msg, now}});
 		});
 
 		D_ASSERT(!redis.channel_name.empty());
@@ -165,18 +165,18 @@ void RadioReceivedMessageQueue::start() {
 			auto &subscription = this->subscription_;
 			if (msg->type == ix::WebSocketMessageType::Message) {
 				subscription.add_received_messages(
-				    {{RadioReceivedMessage::MessageType::MESSAGE, std::nullopt, msg->str, now}});
+				    {{RadioReceivedMessage::MessageType::Message, std::nullopt, msg->str, now}});
 			} else if (msg->type == ix::WebSocketMessageType::Open) {
 				subscription.add_received_messages(
-				    {{RadioReceivedMessage::MessageType::CONNECTION, std::nullopt, "", now}});
+				    {{RadioReceivedMessage::MessageType::Connection, std::nullopt, "", now}});
 				subscription.activation_time_ = now;
 			} else if (msg->type == ix::WebSocketMessageType::Close) {
 				subscription.add_received_messages(
-				    {{RadioReceivedMessage::MessageType::DISCONNECTION, std::nullopt, "", now}});
+				    {{RadioReceivedMessage::MessageType::Disconnection, std::nullopt, "", now}});
 				subscription.activation_time_ = 0;
 			} else if (msg->type == ix::WebSocketMessageType::Error) {
 				subscription.add_received_messages(
-				    {{RadioReceivedMessage::MessageType::ERROR, std::nullopt, msg->errorInfo.reason, now}});
+				    {{RadioReceivedMessage::MessageType::Error, std::nullopt, msg->errorInfo.reason, now}});
 			}
 		});
 	} else {

@@ -34,7 +34,7 @@ public:
 	explicit RadioSubscription(const uint64_t id, const std::string &url, const RadioSubscriptionParameters &params,
 	                           uint64_t creation_time, Radio &radio);
 
-	void start(std::shared_ptr<RadioSubscription> &self);
+	void start();
 	void stop();
 
 	~RadioSubscription();
@@ -43,80 +43,54 @@ public:
 		received_messages_.resize(capacity);
 	}
 
-	std::vector<std::shared_ptr<RadioReceivedMessage>> receive_snapshot() {
+	[[nodiscard]] std::vector<std::shared_ptr<RadioReceivedMessage>> receive_snapshot() {
 		return received_messages_.snapshot();
 	}
 
-	std::vector<std::shared_ptr<RadioTransmitMessage>> transmit_snapshot() {
+	[[nodiscard]] std::vector<std::shared_ptr<RadioTransmitMessage>> transmit_snapshot() {
 		return transmit_messages_.snapshot();
 	}
 
-	uint64_t id() const {
-		// Return the id of the subscription
+	[[nodiscard]] uint64_t id() const {
 		return id_;
 	}
 
-	const std::string &url() const {
+	[[nodiscard]] const std::string &url() const {
 		return url_;
 	}
 
-	uint64_t receive_queue_size() {
+	[[nodiscard]] uint64_t receive_queue_size() const {
 		return received_messages_.size();
 	}
 
-	uint64_t receive_has_unseen() {
+	[[nodiscard]] uint64_t receive_has_unseen() const {
 		return received_messages_.has_unseen();
 	}
 
-	uint64_t creation_time() const {
+	[[nodiscard]] uint64_t creation_time() const {
 		return creation_time_;
 	}
 
-	uint64_t activation_time() const {
+	[[nodiscard]] uint64_t activation_time() const {
 		return activation_time_;
 	}
 
-	RadioSubscriptionQueueState state() {
+	[[nodiscard]] RadioSubscriptionQueueState state() {
 		RadioSubscriptionQueueState state;
 		state.received = received_messages_.state();
 		state.transmit = transmit_messages_.state();
 		return state;
 	}
 
-	bool disabled() const {
+	[[nodiscard]] bool disabled() const {
 		return disabled_;
 	}
 
-	bool has_unseen() const {
+	[[nodiscard]] bool has_unseen() const {
 		return received_messages_.has_unseen();
 	}
 
 	void set_disabled(bool disabled) {
-		// if (disabled) {
-		// 	if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(connection_)) {
-		// 		auto &webSocket = std::get<std::unique_ptr<ix::WebSocket>>(connection_);
-		// 		webSocket->stop();
-		// 	} else if (std::holds_alternative<RedisSubscription>(connection_)) {
-		// 		auto &redis = std::get<RedisSubscription>(connection_);
-		// 		redis.subscriber->unsubscribe();
-		// 	}
-		// } else {
-
-		// 	// if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(connection_)) {
-		// 	// 	auto &webSocket = std::get<std::unique_ptr<ix::WebSocket>>(connection_);
-		// 	// 	webSocket->start();
-		// 	// } else if (std::holds_alternative<RedisSubscription>(connection_)) {
-		// 	// 	auto &redis = std::get<RedisSubscription>(connection_);
-		// 	// 	D_ASSERT(channel_name_.has_value());
-		// 	// 	redis.subscriber->subscribe(channel_name_.value());
-
-		// 	// 	if (reader_thread_->joinable()) {
-		// 	// 		reader_thread_->join();
-		// 	// 	}
-
-		// 	// 	reader_thread_ = std::thread([&redis] { redis.subscriber->consume(); });
-		// 	// }
-		// }
 		disabled_ = disabled;
 	}
 
@@ -126,7 +100,6 @@ public:
 
 	// This could be called by another thread.
 	void add_received_messages(std::vector<RadioReceiveMessageParts> messages, uint64_t *message_ids = nullptr);
-
 	void add_transmit_messages(std::vector<RadioTransmitMessageParts> messages, uint64_t *message_ids);
 
 	void transmit_messages_delete_finished() {

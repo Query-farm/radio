@@ -5,7 +5,7 @@
 
 namespace duckdb {
 
-void RadioTransmitMessageQueue::rebuild_pending_by_send_time() {
+void RadioTransmitMessageQueue::rebuild_pending_retry_queue() {
 	pending_by_send_time_ = {};
 	for (const auto &[_, msg] : messages_by_id_) {
 		if (msg->state().state == RadioTransmitMessageProcessingState::PENDING) {
@@ -41,7 +41,7 @@ void RadioTransmitMessageQueue::delete_finished() {
 		}
 	}
 
-	rebuild_pending_by_send_time();
+	rebuild_pending_retry_queue();
 }
 
 std::shared_ptr<RadioTransmitMessage> RadioTransmitMessageQueue::wait_and_pop() {
@@ -185,7 +185,7 @@ void RadioTransmitMessageQueue::remove_by_ids(const std::unordered_set<uint64_t>
 		messages_by_id_.erase(id);
 	}
 
-	rebuild_pending_by_send_time();
+	rebuild_pending_retry_queue();
 }
 
 uint64_t RadioTransmitMessageQueue::size() const {

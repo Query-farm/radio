@@ -11,10 +11,10 @@ struct RadioTransmitMessageParts {
 };
 
 // The state of the message, proceeds PENDING, SENDING, SENT.
-enum RadioTransmitMessageProcessingState { PENDING, SENDING, SENT, TIME_EXPIRED, RETRIES_EXHAUSTED };
+enum class RadioTransmitMessageProcessingState { PENDING, SENDING, SENT, TIME_EXPIRED, RETRIES_EXHAUSTED };
 
 struct RadioTransmitMessageState {
-	RadioTransmitMessageProcessingState state = PENDING;
+	RadioTransmitMessageProcessingState state = RadioTransmitMessageProcessingState::PENDING;
 	uint64_t last_attempt_start_time = 0;
 	uint64_t last_attempt_end_time = 0;
 
@@ -32,30 +32,30 @@ struct RadioTransmitMessageState {
 // it has a body, the number of retries, and the time it was created.
 class RadioTransmitMessage {
 public:
-	explicit RadioTransmitMessage(const uint64_t id, const std::optional<std::string> &channel,
-	                              const std::string &message, const uint64_t creation_time, const uint32_t max_attempts,
-	                              const uint64_t expire_duration_ms)
-	    : id_(id), channel_(std::move(channel)), message_(std::move(message)), creation_time_(creation_time),
-	      max_attempts_(max_attempts), expire_duration_ms_(expire_duration_ms) {
-		D_ASSERT(max_attempts > 0);
+	explicit RadioTransmitMessage(const uint64_t id, const uint64_t creation_time,
+	                              const RadioTransmitMessageParts &parts)
+	    : id_(id), channel_(std::move(parts.channel)), message_(std::move(parts.message)),
+	      creation_time_(creation_time), max_attempts_(parts.max_attempts),
+	      expire_duration_ms_(parts.expire_duration_ms) {
+		D_ASSERT(max_attempts_ > 0);
 		const auto now = std::chrono::steady_clock::now();
-		send_expire_time_ = now + std::chrono::milliseconds(expire_duration_ms);
+		send_expire_time_ = now + std::chrono::milliseconds(parts.expire_duration_ms);
 		state_.next_attempt_time = now;
 	}
 
-	const std::optional<std::string> &channel() const {
+	[[nodiscard]] const std::optional<std::string> &channel() const {
 		return channel_;
 	}
 
-	const std::string &message() const {
+	[[nodiscard]] const std::string &message() const {
 		return message_;
 	}
 
-	uint64_t creation_time() const {
+	[[nodiscard]] uint64_t creation_time() const {
 		return creation_time_;
 	}
 
-	RadioTransmitMessageState state() const {
+	[[nodiscard]] RadioTransmitMessageState state() const {
 		std::lock_guard<std::mutex> lock(mtx);
 		return state_;
 	}
@@ -111,15 +111,15 @@ public:
 		}
 	}
 
-	uint64_t id() const {
+	[[nodiscard]] uint64_t id() const {
 		return id_;
 	}
 
-	uint32_t expire_duration_ms() const {
+	[[nodiscard]] uint32_t expire_duration_ms() const {
 		return expire_duration_ms_;
 	}
 
-	uint32_t max_attempts() const {
+	[[nodiscard]] uint32_t max_attempts() const {
 		return max_attempts_;
 	}
 

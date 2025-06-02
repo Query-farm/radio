@@ -34,18 +34,11 @@ public:
 
 	std::shared_ptr<RadioTransmitMessage> wait_and_pop();
 
-	//	std::shared_ptr<RadioTransmitMessage> pop_pending_send();
 	std::vector<std::shared_ptr<RadioTransmitMessage>> snapshot() const;
-
-	// Resive the capacity of the processed messages queue.
-	// void resize(uint64_t new_capacity);
 
 	void remove_by_ids(const std::unordered_set<uint64_t> &ids_to_remove);
 
 	uint64_t size() const;
-
-	// Return the capacity of the processed messages
-	// uint64_t capacity() const;
 
 	bool empty() const;
 
@@ -71,7 +64,7 @@ public:
 		for (uint64_t id : ids_to_remove) {
 			messages_by_id_.erase(id);
 		}
-		rebuild_pending_by_send_time();
+		rebuild_pending_retry_queue();
 	}
 
 	bool flush_complete(const std::chrono::steady_clock::time_point &timeout);
@@ -79,7 +72,7 @@ public:
 	void start();
 
 private:
-	void rebuild_pending_by_send_time();
+	void rebuild_pending_retry_queue();
 
 	RadioSubscription &subscription_;
 
@@ -87,7 +80,7 @@ private:
 	double retry_multiplier_;
 	int32_t retry_max_delay_ms_;
 
-	struct CompareQueuedMessage {
+	struct MessageRetryTimeComparator {
 		bool operator()(const std::shared_ptr<RadioTransmitMessage> &a,
 		                const std::shared_ptr<RadioTransmitMessage> &b) const {
 			return a->state().next_attempt_time > b->state().next_attempt_time; // Min-heap based on next attempt time
@@ -95,7 +88,7 @@ private:
 	};
 
 	std::priority_queue<std::shared_ptr<RadioTransmitMessage>, std::vector<std::shared_ptr<RadioTransmitMessage>>,
-	                    CompareQueuedMessage>
+	                    MessageRetryTimeComparator>
 	    pending_by_send_time_;
 	std::condition_variable pending_by_send_cv_;
 

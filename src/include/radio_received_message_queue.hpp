@@ -25,27 +25,26 @@ public:
 
 	std::shared_ptr<RadioReceivedMessage> pop();
 
-	std::vector<std::shared_ptr<RadioReceivedMessage>> snapshot() const;
+	[[nodiscard]] std::vector<std::shared_ptr<RadioReceivedMessage>> snapshot() const;
 
 	void resize(uint64_t new_capacity);
 
 	void remove_by_ids(const std::unordered_set<uint64_t> &ids_to_remove);
 
-	uint64_t size() const;
+	[[nodiscard]] uint64_t size() const;
 
-	bool has_unseen() const;
+	[[nodiscard]] bool has_unseen() const;
 
-	uint64_t capacity() const;
+	[[nodiscard]] uint64_t capacity() const;
 
-	bool empty() const;
+	[[nodiscard]] bool empty() const;
 
 	void clear();
 
 	void stop();
-
 	void start();
 
-	RadioReceivedMessageQueueState state() const;
+	[[nodiscard]] RadioReceivedMessageQueueState state() const;
 
 	void readerLoop();
 
