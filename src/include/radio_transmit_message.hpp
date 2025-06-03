@@ -1,6 +1,7 @@
 #pragma once
 #include "duckdb.hpp"
 #include <optional>
+#include <cmath>
 
 namespace duckdb {
 
