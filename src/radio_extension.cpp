@@ -612,6 +612,11 @@ void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, D
 	    StringVector::AddStringOrBlob(output.data[7], message->message());
 }
 
+inline void RadioVersionFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	result.SetValue(0, Value("20250601.01"));
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 	// There are a few functions for the radio extension to process.
 
@@ -632,6 +637,9 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto unsubscribe_function =
 	    TableFunction("radio_unsubscribe", {LogicalType::VARCHAR}, RadioUnsubscribe, RadioUnsubscribeBind);
 	ExtensionUtil::RegisterFunction(instance, unsubscribe_function);
+
+	auto version_function = ScalarFunction("radio_version", {}, LogicalType::VARCHAR, RadioVersionFunction);
+	ExtensionUtil::RegisterFunction(instance, version_function);
 
 	// auto transmit_function = ScalarFunction("transmit", {LogicalType::VARCHAR, LogicalType::BLOB},
 	// LogicalType::BOOLEAN,
