@@ -1,10 +1,7 @@
 {
         "dependencies": [
                 {
-                        "name": "ixwebsocket",
-                        "features": [
-                                "openssl"
-                        ]
+                        "name": "ixwebsocket"
                 },
                 {
                         "name": "redis-plus-plus",
