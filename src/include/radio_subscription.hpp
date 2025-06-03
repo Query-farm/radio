@@ -8,6 +8,7 @@
 #include "radio_subscription_parameters.hpp"
 #include <IXWebSocket.h>
 #include "redis_subscription.hpp"
+#include <variant>
 namespace duckdb {
 
 class Radio;
