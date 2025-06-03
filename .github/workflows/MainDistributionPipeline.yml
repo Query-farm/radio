@@ -19,3 +19,5 @@ jobs:
       duckdb_version: main
       ci_tools_version: main
       extension_name: radio
+      exclude_archs: "wasm_mvp;wasm_eh;wasm_threads"
+
