@@ -8,6 +8,7 @@
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 #include "radio_utils.hpp"
 #include "radio_subscription.hpp"
+#include <optional>
 
 namespace duckdb {
 
