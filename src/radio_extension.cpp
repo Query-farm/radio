@@ -641,17 +641,6 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto version_function = ScalarFunction("radio_version", {}, LogicalType::VARCHAR, RadioVersionFunction);
 	ExtensionUtil::RegisterFunction(instance, version_function);
 
-	// auto transmit_function = ScalarFunction("transmit", {LogicalType::VARCHAR, LogicalType::BLOB},
-	// LogicalType::BOOLEAN,
-	//                                         RadioTransmitFunction);
-	// ExtensionUtil::RegisterFunction(instance, transmit_function);
-
-	// auto turn_off_function =
-	//     ScalarFunction("turn_off", {LogicalType::VARCHAR}, LogicalType::SQLNULL, RadioTurnOffFunction);
-	// ExtensionUtil::RegisterFunction(instance, turn_off_function);
-
-	// Add a message just like if it was received from a subscription.
-
 	auto listen_function =
 	    TableFunction("radio_listen", {LogicalType::BOOLEAN, LogicalType::INTERVAL}, RadioListen, RadioListenBind);
 	ExtensionUtil::RegisterFunction(instance, listen_function);
