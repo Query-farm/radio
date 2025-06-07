@@ -155,6 +155,6 @@ private:
 	bool is_stopped_ = false;
 };
 
-void RadioSubscriptionAddFunctions(DatabaseInstance &instance);
+void RadioSubscriptionAddFunctions(ExtensionLoader &loader);
 
 } // namespace duckdb

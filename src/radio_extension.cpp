@@ -5,7 +5,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 
 #include "radio_received_message.hpp"
@@ -617,7 +616,7 @@ inline void RadioVersionFunction(DataChunk &args, ExpressionState &state, Vector
 	result.SetValue(0, Value("20250601.01"));
 }
 
-static void LoadInternal(DatabaseInstance &instance) {
+static void LoadInternal(ExtensionLoader &loader) {
 	// There are a few functions for the radio extension to process.
 
 	// This should take an optional parameter for max number of messages.
@@ -632,64 +631,47 @@ static void LoadInternal(DatabaseInstance &instance) {
 	subscribe_function.named_parameters["transmit_retry_multiplier"] = LogicalType::DOUBLE;
 	subscribe_function.named_parameters["transmit_retry_max_delay_ms"] = LogicalType::INTEGER;
 
-	ExtensionUtil::RegisterFunction(instance, subscribe_function);
+	loader.RegisterFunction(subscribe_function);
 
 	auto unsubscribe_function =
 	    TableFunction("radio_unsubscribe", {LogicalType::VARCHAR}, RadioUnsubscribe, RadioUnsubscribeBind);
-	ExtensionUtil::RegisterFunction(instance, unsubscribe_function);
+	loader.RegisterFunction(unsubscribe_function);
 
 	auto version_function = ScalarFunction("radio_version", {}, LogicalType::VARCHAR, RadioVersionFunction);
-	ExtensionUtil::RegisterFunction(instance, version_function);
+	loader.RegisterFunction(version_function);
 
 	auto listen_function =
 	    TableFunction("radio_listen", {LogicalType::BOOLEAN, LogicalType::INTERVAL}, RadioListen, RadioListenBind);
-	ExtensionUtil::RegisterFunction(instance, listen_function);
+	loader.RegisterFunction(listen_function);
 
 	auto flush_function = TableFunction("radio_flush", {LogicalType::INTERVAL}, RadioFlush, RadioFlushBind);
-	ExtensionUtil::RegisterFunction(instance, flush_function);
+	loader.RegisterFunction(flush_function);
 
 	auto subscriptions_function = TableFunction("radio_subscriptions", {}, RadioSubscriptions, RadioSubscriptionsBind);
-	ExtensionUtil::RegisterFunction(instance, subscriptions_function);
+	loader.RegisterFunction(subscriptions_function);
 
 	auto received_messages_function =
 	    TableFunction("radio_received_messages", {}, RadioReceivedMessages, RadioReceivedMessagesBind);
-	ExtensionUtil::RegisterFunction(instance, received_messages_function);
+	loader.RegisterFunction(received_messages_function);
 
 	auto sleep_function = TableFunction("radio_sleep", {LogicalType::INTERVAL}, RadioSleep, RadioSleepBind);
-	ExtensionUtil::RegisterFunction(instance, sleep_function);
+	loader.RegisterFunction(sleep_function);
 
-	RadioSubscriptionAddFunctions(instance);
+	RadioSubscriptionAddFunctions(loader);
 }
 
-void RadioExtension::Load(DuckDB &db) {
-	LoadInternal(*db.instance);
+void RadioExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
 }
 std::string RadioExtension::Name() {
 	return "radio";
-}
-
-std::string RadioExtension::Version() const {
-#ifdef EXT_VERSION_RADIO
-	return EXT_VERSION_RADIO;
-#else
-	return "";
-#endif
 }
 
 } // namespace duckdb
 
 extern "C" {
 
-DUCKDB_EXTENSION_API void radio_init(duckdb::DatabaseInstance &db) {
-	duckdb::DuckDB db_wrapper(db);
-	db_wrapper.LoadExtension<duckdb::RadioExtension>();
-}
-
-DUCKDB_EXTENSION_API const char *radio_version() {
-	return duckdb::DuckDB::LibraryVersion();
+DUCKDB_CPP_EXTENSION_ENTRY(radio, loader) {
+	duckdb::LoadInternal(loader);
 }
 }
-
-#ifndef DUCKDB_EXTENSION_MAIN
-#error DUCKDB_EXTENSION_MAIN not defined
-#endif

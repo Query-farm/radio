@@ -4,7 +4,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 #include "radio_utils.hpp"
 #include "radio_subscription.hpp"
@@ -464,38 +463,38 @@ void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p,
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = message_id;
 }
 
-void RadioSubscriptionAddFunctions(DatabaseInstance &instance) {
+void RadioSubscriptionAddFunctions(ExtensionLoader &loader) {
 
 	auto received_message_add_function = TableFunction(
 	    "radio_subscription_received_message_add", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BLOB},
 	    RadioSubscriptionReceivedMessageAdd, RadioSubscriptionReceivedMessageAddBind);
-	ExtensionUtil::RegisterFunction(instance, received_message_add_function);
+	loader.RegisterFunction(received_message_add_function);
 
 	auto transmit_messages_delete_finished = TableFunction(
 	    "radio_subscription_transmit_messages_delete_finished", {LogicalType::VARCHAR},
 	    RadioSubscriptionTransmitMessagesDeleteFinished, RadioSubscriptionTransmitMessagesDeleteFinishedBind);
-	ExtensionUtil::RegisterFunction(instance, transmit_messages_delete_finished);
+	loader.RegisterFunction(transmit_messages_delete_finished);
 
 	auto transmit_messages_delete =
 	    TableFunction("radio_subscription_transmit_message_delete", {LogicalType::VARCHAR, LogicalType::UBIGINT},
 	                  RadioSubscriptionTransmitMessagesDelete, RadioSubscriptionTransmitMessagesDeleteBind);
-	ExtensionUtil::RegisterFunction(instance, transmit_messages_delete);
+	loader.RegisterFunction(transmit_messages_delete);
 
 	auto received_messages_function =
 	    TableFunction("radio_subscription_received_messages", {LogicalType::VARCHAR}, RadioSubscriptionReceivedMessages,
 	                  RadioSubscriptionReceivedMessagesBind);
-	ExtensionUtil::RegisterFunction(instance, received_messages_function);
+	loader.RegisterFunction(received_messages_function);
 
 	auto transmit_messages_function =
 	    TableFunction("radio_subscription_transmit_messages", {LogicalType::VARCHAR}, RadioSubscriptionTransmitMessages,
 	                  RadioSubscriptionTransmitMessagesBind);
-	ExtensionUtil::RegisterFunction(instance, transmit_messages_function);
+	loader.RegisterFunction(transmit_messages_function);
 
 	auto transmit_message_add_function = TableFunction(
 	    "radio_transmit_message",
 	    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BLOB, LogicalType::INTEGER, LogicalType::INTERVAL},
 	    RadioTransmitMessageAdd, RadioTransmitMessageAddBind);
-	ExtensionUtil::RegisterFunction(instance, transmit_message_add_function);
+	loader.RegisterFunction(transmit_message_add_function);
 }
 
 RadioSubscription::UrlType RadioSubscription::detect_url_type(const std::string &url) {

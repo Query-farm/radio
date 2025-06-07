@@ -9,9 +9,8 @@ Radio &GetRadio();
 
 class RadioExtension : public Extension {
 public:
-	void Load(DuckDB &db) override;
+	void Load(ExtensionLoader &loader) override;
 	std::string Name() override;
-	std::string Version() const override;
 
 	Radio &GetRadio() {
 		return radio_;
