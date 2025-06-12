@@ -614,7 +614,7 @@ void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, D
 
 inline void RadioVersionFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
-	result.SetValue(0, Value("20250601.01"));
+	result.SetValue(0, Value("20250601.02"));
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
