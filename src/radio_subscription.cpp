@@ -498,7 +498,7 @@ void RadioSubscriptionAddFunctions(ExtensionLoader &loader) {
 }
 
 RadioSubscription::UrlType RadioSubscription::detect_url_type(const std::string &url) {
-	if (url.rfind("ws://", 0) == 0) {
+	if (url.rfind("ws://", 0) == 0 || url.rfind("wss://", 0) == 0) {
 		return RadioSubscription::UrlType::WebSocket;
 	} else if (url.rfind("redis-", 0) == 0) {
 		return RadioSubscription::UrlType::Redis;
