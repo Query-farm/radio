@@ -13,6 +13,8 @@
 #include "radio_utils.hpp"
 #include "radio.hpp"
 
+#include "query_farm_telemetry.hpp"
+
 namespace duckdb {
 
 Radio &GetRadio() {
@@ -658,6 +660,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(sleep_function);
 
 	RadioSubscriptionAddFunctions(loader);
+
+	QueryFarmSendTelemetry(loader, instance.shared_from_this(), "radio", "2025092301");
 }
 
 void RadioExtension::Load(ExtensionLoader &loader) {
