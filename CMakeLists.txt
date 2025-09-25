@@ -20,7 +20,8 @@ src/radio.cpp
 src/radio_subscription.cpp
 src/radio_utils.cpp
 src/radio_transmit_message_queue.cpp
-src/radio_received_message_queue.cpp)
+src/radio_received_message_queue.cpp
+src/query_farm_telemetry.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})

@@ -596,10 +596,9 @@ void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, D
 
 	// From the message
 	FlatVector::GetData<uint64_t>(output.data[2])[0] = message->id();
-	FlatVector::GetData<uint16_t>(output.data[3])[0] =
-	    RadioReceivedMessage::message_type_to_enum_index(message->type());
+	FlatVector::GetData<uint8_t>(output.data[3])[0] = RadioReceivedMessage::message_type_to_enum_index(message->type());
 
-	FlatVector::GetData<uint64_t>(output.data[4])[0] = message->receive_time();
+	FlatVector::GetData<int64_t>(output.data[4])[0] = message->receive_time();
 	FlatVector::GetData<uint64_t>(output.data[5])[0] = message->seen_count();
 
 	if (message->channel().has_value()) {
@@ -661,7 +660,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	RadioSubscriptionAddFunctions(loader);
 
-	QueryFarmSendTelemetry(loader, instance.shared_from_this(), "radio", "2025092301");
+	QueryFarmSendTelemetry(loader, loader.GetDatabaseInstance().shared_from_this(), "radio", "2025092301");
 }
 
 void RadioExtension::Load(ExtensionLoader &loader) {
