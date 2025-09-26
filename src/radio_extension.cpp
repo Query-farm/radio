@@ -660,7 +660,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	RadioSubscriptionAddFunctions(loader);
 
-	QueryFarmSendTelemetry(loader, loader.GetDatabaseInstance().shared_from_this(), "radio", "2025092301");
+	QueryFarmSendTelemetry(loader, "radio", "2025092301");
 }
 
 void RadioExtension::Load(ExtensionLoader &loader) {
