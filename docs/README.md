@@ -4,6 +4,13 @@ The **Radio** extension by **Query.Farm** enables DuckDB to interact seamlessly 
 
 The extension is named *Radio* because it effectively equips DuckDB with a two-way radio—allowing it to **listen for** and **broadcast** messages across event-driven systems.
 
+## Installation
+
+```sql
+INSTALL radio FROM community;
+LOAD radio;
+```
+
 # Documentation
 
 See the [extension documentation](https://query.farm/duckdb_extension_radio.html).
@@ -46,8 +53,6 @@ GEN=ninja make
 
 ## Running the extension
 To run the extension code, simply start the shell with `./build/release/duckdb`. This shell will have the extension pre-loaded.
-
-```
 
 ## Running the tests
 Different tests can be created for DuckDB extensions. The primary way of testing DuckDB extensions should be the SQL tests in `./test/sql`. These SQL tests can be run using:
