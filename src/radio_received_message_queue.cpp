@@ -100,16 +100,11 @@ void blackholeMessageHandler(const ix::WebSocketMessagePtr &msg) {
 
 void RadioReceivedMessageQueue::stop() {
 	stop_flag_ = true;
-	if (std::holds_alternative<RedisSubscription>(subscription_.connection)) {
-		auto &redis = std::get<RedisSubscription>(subscription_.connection);
-		try {
-			D_ASSERT(redis.subscriber != nullptr);
-			redis.subscriber->unsubscribe(redis.channel_name);
-		} catch (const std::exception &e) {
-		}
-	} else if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(subscription_.connection)) {
+	if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(subscription_.connection)) {
 		auto &websocket = std::get<std::unique_ptr<ix::WebSocket>>(subscription_.connection);
-		websocket->setOnMessageCallback(blackholeMessageHandler);
+		if (websocket) {
+			websocket->setOnMessageCallback(blackholeMessageHandler);
+		}
 	}
 
 	if (reader_thread_.joinable()) {
@@ -123,44 +118,52 @@ RadioReceivedMessageQueueState RadioReceivedMessageQueue::state() const {
 }
 
 void RadioReceivedMessageQueue::readerLoop() {
-	if (std::holds_alternative<RedisSubscription>(subscription_.connection)) {
+	try {
+		if (!std::holds_alternative<RedisSubscription>(subscription_.connection)) {
+			return;
+		}
 		auto &redis = std::get<RedisSubscription>(subscription_.connection);
-		redis.subscriber = std::make_unique<sw::redis::Subscriber>(redis.redis->subscriber());
-		redis.subscriber->on_message([this](std::string channel, std::string msg) {
+		auto subscriber = redis.redis->subscriber();
+		subscriber.on_message([this](std::string channel, std::string msg) {
+			if (stop_flag_) {
+				return;
+			}
 			const auto now = RadioCurrentTimeMillis();
-			this->subscription_.add_received_messages(
-			    {{RadioReceivedMessage::MessageType::Message, channel, msg, now}});
+			subscription_.add_received_messages({{RadioReceivedMessage::MessageType::Message, channel, msg, now}});
 		});
 
-		D_ASSERT(!redis.channel_name.empty());
-		redis.subscriber->subscribe(redis.channel_name);
-		while (!this->stop_flag_) {
+		subscriber.subscribe(redis.channel_name);
+		subscription_.activation_time_ = RadioCurrentTimeMillis();
+		while (!stop_flag_) {
 			try {
-				redis.subscriber->consume();
-			} catch (const sw::redis::TimeoutError &e) {
-				// We need some timeouts otherwise redis will just block forever.
+				subscriber.consume();
+			} catch (const sw::redis::TimeoutError &) {
+				// The finite socket timeout is the shutdown wake-up mechanism.
 				continue;
-			} catch (const sw::redis::IoError &e) {
-				// FIXME: handle these errors properly.
-				std::cerr << "[I/O error] " << e.what() << std::endl;
-				break; // or reconnect / retry
-			} catch (const sw::redis::Error &e) {
-				std::cerr << "[Redis error] " << e.what() << std::endl;
-				break;
-			} catch (const std::exception &e) {
-				std::cerr << "[Unknown exception] " << e.what() << std::endl;
-				break;
 			}
 		}
-	} else {
-		D_ASSERT(false);
+	} catch (const std::exception &error) {
+		if (!stop_flag_) {
+			try {
+				subscription_.add_received_messages(
+				    {{RadioReceivedMessage::MessageType::Error, std::nullopt, error.what(), RadioCurrentTimeMillis()}});
+			} catch (...) {
+			}
+		}
+		subscription_.activation_time_ = 0;
+	} catch (...) {
+		subscription_.activation_time_ = 0;
 	}
 }
 
 void RadioReceivedMessageQueue::start() {
+	stop_flag_ = false;
 	if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(subscription_.connection)) {
 		auto &websocket = std::get<std::unique_ptr<ix::WebSocket>>(subscription_.connection);
 		websocket->setOnMessageCallback([this](const ix::WebSocketMessagePtr &msg) {
+			if (stop_flag_) {
+				return;
+			}
 			const auto now = RadioCurrentTimeMillis();
 			auto &subscription = this->subscription_;
 			if (msg->type == ix::WebSocketMessageType::Message) {

@@ -47,6 +47,9 @@ void RadioTransmitMessageQueue::delete_finished() {
 std::shared_ptr<RadioTransmitMessage> RadioTransmitMessageQueue::wait_and_pop() {
 	std::unique_lock<std::mutex> lock(mtx);
 	while (true) {
+		if (stop_flag_) {
+			return nullptr;
+		}
 		if (!pending_by_send_time_.empty()) {
 			const auto now = std::chrono::steady_clock::now();
 			const auto next_time = pending_by_send_time_.top()->state().next_attempt_time;
@@ -62,21 +65,21 @@ std::shared_ptr<RadioTransmitMessage> RadioTransmitMessageQueue::wait_and_pop() 
 				pending_by_send_time_.pop();
 				return msg;
 			} else {
-				pending_by_send_cv_.wait_until(lock, *next_time);
+				pending_by_send_cv_.wait_until(lock, *next_time, [&] { return stop_flag_.load(); });
 			}
 		} else {
-			pending_by_send_cv_.wait(lock);
+			pending_by_send_cv_.wait(lock, [&] { return stop_flag_ || !pending_by_send_time_.empty(); });
 		}
 	}
 }
 
 void RadioTransmitMessageQueue::senderLoop() {
-	while (!stop_flag_) {
+	while (true) {
 		std::unique_lock<std::mutex> lock(mtx);
 
-		if (pending_by_send_time_.empty()) {
-			pending_by_send_cv_.wait(lock, [&] { return stop_flag_ || !pending_by_send_time_.empty(); });
-			continue;
+		pending_by_send_cv_.wait(lock, [&] { return stop_flag_ || !pending_by_send_time_.empty(); });
+		if (stop_flag_) {
+			return;
 		}
 
 		auto next_msg = pending_by_send_time_.top();
@@ -87,53 +90,54 @@ void RadioTransmitMessageQueue::senderLoop() {
 
 		if (*next_attempt_time <= now) {
 			pending_by_send_time_.pop();
+			active_sends_++;
 			lock.unlock();
 
-			next_msg->update_state(RadioTransmitMessageProcessingState::SENDING, RadioCurrentTimeMillis(),
-			                       retry_initial_delay_ms_, retry_multiplier_, retry_max_delay_ms_, "");
+			update_message_state(next_msg, RadioTransmitMessageProcessingState::SENDING, RadioCurrentTimeMillis(), "");
 
-			if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(subscription_.connection)) {
-				auto &websocket = std::get<std::unique_ptr<ix::WebSocket>>(subscription_.connection);
-				auto send_result = websocket->sendBinary(next_msg->message());
-
-				next_msg->update_state(send_result.success ? RadioTransmitMessageProcessingState::SENT
-				                                           : RadioTransmitMessageProcessingState::PENDING,
-				                       RadioCurrentTimeMillis(), retry_initial_delay_ms_, retry_multiplier_,
-				                       retry_max_delay_ms_, "");
-			} else if (std::holds_alternative<RedisSubscription>(subscription_.connection)) {
-				auto &redis = std::get<RedisSubscription>(subscription_.connection);
-				D_ASSERT(next_msg->channel().has_value());
-				try {
-					redis.redis->publish(next_msg->channel().value(), next_msg->message());
-				} catch (const sw::redis::TimeoutError &e) {
-					next_msg->update_state(RadioTransmitMessageProcessingState::PENDING, RadioCurrentTimeMillis(),
-					                       retry_initial_delay_ms_, retry_multiplier_, retry_max_delay_ms_, "timeout");
-
-				} catch (const sw::redis::ClosedError &e) {
-					next_msg->update_state(RadioTransmitMessageProcessingState::PENDING, RadioCurrentTimeMillis(),
-					                       retry_initial_delay_ms_, retry_multiplier_, retry_max_delay_ms_,
-					                       "connection closed");
-
-					// maybe reconnect
-				} catch (const sw::redis::Error &e) {
-					next_msg->update_state(RadioTransmitMessageProcessingState::PENDING, RadioCurrentTimeMillis(),
-					                       retry_initial_delay_ms_, retry_multiplier_, retry_max_delay_ms_,
-					                       string("Redis error:") + e.what());
-				}
+			bool success = false;
+			string result;
+			if (stop_flag_) {
+				result = "subscription stopped";
 			} else {
-				throw std::runtime_error("Unsupported connection type for sending messages");
+				try {
+					if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(subscription_.connection)) {
+						auto &websocket = std::get<std::unique_ptr<ix::WebSocket>>(subscription_.connection);
+						if (!websocket) {
+							throw std::runtime_error("WebSocket is not initialized");
+						}
+						success = websocket->sendBinary(next_msg->message()).success;
+						if (!success) {
+							result = "WebSocket send failed";
+						}
+					} else if (std::holds_alternative<RedisSubscription>(subscription_.connection)) {
+						if (!next_msg->channel().has_value()) {
+							throw std::runtime_error("Redis transmit requires a channel");
+						}
+						auto &redis = std::get<RedisSubscription>(subscription_.connection);
+						redis.redis->publish(next_msg->channel().value(), next_msg->message());
+						success = true;
+					} else {
+						throw std::runtime_error("Subscription connection is not initialized");
+					}
+				} catch (const std::exception &error) {
+					result = error.what();
+				} catch (...) {
+					result = "Unknown transport error";
+				}
 			}
-			// The update state will calculate the next attempt time based on the retry logic, if
-			// necessary.
-			if (next_msg->state().state == RadioTransmitMessageProcessingState::PENDING) {
-				// If the send failed, we need to requeue it for the next attempt.
-				lock.lock();
-				pending_by_send_time_.push(next_msg);
-				lock.unlock();
-				pending_by_send_cv_.notify_all();
+
+			update_message_state(next_msg,
+			                     success ? RadioTransmitMessageProcessingState::SENT
+			                             : RadioTransmitMessageProcessingState::PENDING,
+			                     RadioCurrentTimeMillis(), result);
+			{
+				std::lock_guard<std::mutex> send_lock(mtx);
+				active_sends_--;
 			}
+			pending_by_send_cv_.notify_all();
 		} else {
-			pending_by_send_cv_.wait_until(lock, *next_attempt_time);
+			pending_by_send_cv_.wait_until(lock, *next_attempt_time, [&] { return stop_flag_.load(); });
 		}
 	}
 }
@@ -226,9 +230,15 @@ void RadioTransmitMessageQueue::update_message_state(std::shared_ptr<RadioTransm
 		state_.latest_failure_time = std::max(current_time, state_.latest_failure_time);
 	}
 
-	if (after_update_state.state == RadioTransmitMessageProcessingState::PENDING) {
-		pending_by_send_time_.push(message);
+	if (after_update_state.state == RadioTransmitMessageProcessingState::PENDING && !stop_flag_) {
+		// The message may have been deleted while its transport call was in
+		// progress. Only retry it if it is still the live map entry.
+		auto entry = messages_by_id_.find(message->id());
+		if (entry != messages_by_id_.end() && entry->second == message) {
+			pending_by_send_time_.push(message);
+		}
 	}
+	pending_by_send_cv_.notify_all();
 }
 
 RadioTransmitMessageQueueState RadioTransmitMessageQueue::state() const {
@@ -238,12 +248,13 @@ RadioTransmitMessageQueueState RadioTransmitMessageQueue::state() const {
 
 bool RadioTransmitMessageQueue::flush_complete(const std::chrono::steady_clock::time_point &timeout) {
 	std::unique_lock<std::mutex> lock(mtx);
-	bool success =
-	    pending_by_send_cv_.wait_until(lock, timeout, [&]() { return stop_flag_ || pending_by_send_time_.empty(); });
+	bool success = pending_by_send_cv_.wait_until(
+	    lock, timeout, [&]() { return stop_flag_ || (pending_by_send_time_.empty() && active_sends_ == 0); });
 	return success;
 }
 
 void RadioTransmitMessageQueue::start() {
+	stop_flag_ = false;
 	sender_thread_ = std::thread([this] { this->senderLoop(); });
 }
 

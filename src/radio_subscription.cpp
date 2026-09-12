@@ -7,6 +7,7 @@
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 #include "radio_utils.hpp"
 #include "radio_subscription.hpp"
+#include <limits>
 #include <optional>
 
 namespace duckdb {
@@ -27,7 +28,6 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesDeleteBind(Clie
                                                                             TableFunctionBindInput &input,
                                                                             vector<LogicalType> &return_types,
                                                                             vector<string> &names) {
-
 	if (input.inputs.size() != 2) {
 		throw BinderException("radio_subscription_transmit_message_delete requires 2 arguments");
 	}
@@ -38,7 +38,7 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesDeleteBind(Clie
 	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
 	names.emplace_back("ok");
 
-	return make_uniq<RadioSubscriptionTransmitMessagesDeleteBindData>(GetRadio(), url, id);
+	return make_uniq<RadioSubscriptionTransmitMessagesDeleteBindData>(GetRadio(context), url, id);
 }
 
 void RadioSubscriptionTransmitMessagesDelete(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -78,7 +78,6 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesDeleteFinishedB
                                                                                     TableFunctionBindInput &input,
                                                                                     vector<LogicalType> &return_types,
                                                                                     vector<string> &names) {
-
 	if (input.inputs.size() != 1) {
 		throw BinderException("radio_subscription_transmit_messages_delete_finished requires 1 argument");
 	}
@@ -88,7 +87,7 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesDeleteFinishedB
 	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
 	names.emplace_back("ok");
 
-	return make_uniq<RadioSubscriptionTransmitMessagesDeleteFinishedBindData>(GetRadio(), url);
+	return make_uniq<RadioSubscriptionTransmitMessagesDeleteFinishedBindData>(GetRadio(context), url);
 }
 
 void RadioSubscriptionTransmitMessagesDeleteFinished(ClientContext &context, TableFunctionInput &data_p,
@@ -135,21 +134,19 @@ static unique_ptr<FunctionData> RadioSubscriptionReceivedMessageAddBind(ClientCo
                                                                         TableFunctionBindInput &input,
                                                                         vector<LogicalType> &return_types,
                                                                         vector<string> &names) {
-
 	if (input.inputs.size() != 3) {
-		throw BinderException("radio_add_message requires 4 arguments");
+		throw BinderException("radio_subscription_received_message_add requires 3 arguments");
 	}
 
 	const auto url = input.inputs[0].GetValue<string>();
-	const auto message_type = input.inputs[1].GetValue<string>();
-	const auto channel = input.inputs[2].GetValue<string>();
-	const auto message = input.inputs[3].GetValue<string>();
+	const auto channel = input.inputs[1].GetValue<string>();
+	const auto message = input.inputs[2].GetValue<string>();
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
 	return make_uniq<RadioSubscriptionReceivedMessageAddBindData>(
-	    GetRadio(), url, RadioReceivedMessage::convert_to_message_type(message_type), channel, message);
+	    GetRadio(context), url, RadioReceivedMessage::MessageType::Message, channel, message);
 }
 
 void RadioSubscriptionReceivedMessageAdd(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -194,7 +191,6 @@ static unique_ptr<FunctionData> RadioSubscriptionReceivedMessagesBind(ClientCont
                                                                       TableFunctionBindInput &input,
                                                                       vector<LogicalType> &return_types,
                                                                       vector<string> &names) {
-
 	if (input.inputs.size() != 1) {
 		throw BinderException("radio_subscription_received_messages requires 1 argument");
 	}
@@ -216,12 +212,12 @@ static unique_ptr<FunctionData> RadioSubscriptionReceivedMessagesBind(ClientCont
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("message");
 
-	auto subscription = GetRadio().GetSubscription(url);
+	auto subscription = GetRadio(context).GetSubscription(url);
 	if (!subscription) {
 		throw InvalidInputException("No subscription found for URL: " + url);
 	}
 
-	return make_uniq<RadioSubscriptionReceivedMessagesBindData>(GetRadio(), subscription);
+	return make_uniq<RadioSubscriptionReceivedMessagesBindData>(GetRadio(context), subscription);
 }
 
 void RadioSubscriptionReceivedMessages(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -239,7 +235,7 @@ void RadioSubscriptionReceivedMessages(ClientContext &context, TableFunctionInpu
 	output.SetCardinality(1);
 
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = message->id();
-	FlatVector::GetData<uint64_t>(output.data[1])[0] = message->receive_time();
+	FlatVector::GetData<int64_t>(output.data[1])[0] = static_cast<int64_t>(message->receive_time());
 	FlatVector::GetData<uint64_t>(output.data[2])[0] = message->seen_count();
 
 	if (message->channel().has_value()) {
@@ -281,13 +277,12 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
                                                                       TableFunctionBindInput &input,
                                                                       vector<LogicalType> &return_types,
                                                                       vector<string> &names) {
-
 	if (input.inputs.size() != 1) {
 		throw BinderException("radio_subscription_transmit_messages requires 1 argument");
 	}
 
 	const auto url = input.inputs[0].GetValue<string>();
-	auto subscription = GetRadio().GetSubscription(url);
+	auto subscription = GetRadio(context).GetSubscription(url);
 	if (!subscription) {
 		throw InvalidInputException("No subscription found for URL: " + url);
 	}
@@ -326,7 +321,7 @@ static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientCont
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("result");
 
-	return make_uniq<RadioSubscriptionTransmitMessagesBindData>(GetRadio(), subscription);
+	return make_uniq<RadioSubscriptionTransmitMessagesBindData>(GetRadio(context), subscription);
 }
 
 void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -346,11 +341,11 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 	auto state = message->state();
 
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = message->id();
-	FlatVector::GetData<uint64_t>(output.data[1])[0] = message->creation_time();
+	FlatVector::GetData<int64_t>(output.data[1])[0] = static_cast<int64_t>(message->creation_time());
 	STORE_NULLABLE_TIMESTAMP(output.data[2], state.last_attempt_start_time);
 	STORE_NULLABLE_TIMESTAMP(output.data[3], state.last_attempt_end_time);
 
-	int16_t state_idx;
+	uint8_t state_idx;
 	switch (state.state) {
 	case RadioTransmitMessageProcessingState::PENDING:
 		state_idx = 0;
@@ -368,7 +363,7 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 		state_idx = 4;
 		break;
 	}
-	FlatVector::GetData<int16_t>(output.data[4])[0] = state_idx;
+	FlatVector::GetData<uint8_t>(output.data[4])[0] = state_idx;
 
 	FlatVector::GetData<uint32_t>(output.data[5])[0] = message->expire_duration_ms();
 	FlatVector::GetData<uint32_t>(output.data[6])[0] = message->max_attempts();
@@ -408,7 +403,6 @@ struct RadioTransmitMessageAddBindData : public TableFunctionData {
 
 static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &context, TableFunctionBindInput &input,
                                                             vector<LogicalType> &return_types, vector<string> &names) {
-
 	if (input.inputs.size() != 5) {
 		throw BinderException("radio_transmit_message requires 5 arguments");
 	}
@@ -426,11 +420,14 @@ static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &conte
 	const auto expire_time = input.inputs[4].GetValue<interval_t>();
 
 	const auto real_expire_time = Interval::GetMilli(expire_time);
+	if (real_expire_time < 0 || real_expire_time > std::numeric_limits<uint32_t>::max()) {
+		throw InvalidInputException("expire_duration must be between 0 and 4294967295 milliseconds");
+	}
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
-	return make_uniq<RadioTransmitMessageAddBindData>(GetRadio(), url, channel, message, max_attempts,
+	return make_uniq<RadioTransmitMessageAddBindData>(GetRadio(context), url, channel, message, max_attempts,
 	                                                  real_expire_time);
 }
 
@@ -453,6 +450,7 @@ void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p,
 	uint64_t message_id = 0;
 
 	RadioTransmitMessageParts message_parts;
+	message_parts.channel = bind_data.channel_;
 	message_parts.message = bind_data.message_;
 	message_parts.expire_duration_ms = bind_data.expire_duration_ms_;
 	message_parts.max_attempts = bind_data.max_attempts_;
@@ -464,7 +462,6 @@ void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p,
 }
 
 void RadioSubscriptionAddFunctions(ExtensionLoader &loader) {
-
 	auto received_message_add_function = TableFunction(
 	    "radio_subscription_received_message_add", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BLOB},
 	    RadioSubscriptionReceivedMessageAdd, RadioSubscriptionReceivedMessageAddBind);
@@ -500,7 +497,7 @@ void RadioSubscriptionAddFunctions(ExtensionLoader &loader) {
 RadioSubscription::UrlType RadioSubscription::detect_url_type(const std::string &url) {
 	if (url.rfind("ws://", 0) == 0 || url.rfind("wss://", 0) == 0) {
 		return RadioSubscription::UrlType::WebSocket;
-	} else if (url.rfind("redis-", 0) == 0) {
+	} else if (url.rfind("redis://", 0) == 0 || url.rfind("redis-", 0) == 0) {
 		return RadioSubscription::UrlType::Redis;
 	}
 	return RadioSubscription::UrlType::Unknown;
@@ -539,8 +536,13 @@ std::string RadioSubscription::normalize_redis_url(const std::string &url) {
 	RadioSubscription::UrlType type = RadioSubscription::detect_url_type(url);
 	switch (type) {
 	case RadioSubscription::UrlType::Redis:
-		// Convert redis-tcp:// to tcp://
-		return url.substr(std::string("redis-").size());
+		// redis-plus-plus accepts redis:// directly. The historical Radio
+		// spellings redis-tcp://, redis-tls:// and redis-unix:// are converted
+		// to the corresponding redis-plus-plus schemes.
+		if (url.rfind("redis-", 0) == 0) {
+			return url.substr(std::string("redis-").size());
+		}
+		return url;
 	default:
 		return {};
 	}
@@ -585,7 +587,7 @@ std::string remove_query_param(const std::string &url, const std::string &param_
 
 RadioSubscription::RadioSubscription(const uint64_t id, const std::string &url,
                                      const RadioSubscriptionParameters &params, uint64_t creation_time, Radio &radio)
-    : id_(id), url_type_(detect_url_type(url)), url_(std::move(url)), creation_time_(creation_time), disabled_(false),
+    : id_(id), url_type_(detect_url_type(url)), url_(url), creation_time_(creation_time), disabled_(false),
       received_messages_(*this, params.receive_message_capacity),
       transmit_messages_(*this, params.transmit_retry_initial_delay_ms, params.transmit_retry_multiplier,
                          params.transmit_retry_max_delay_ms),
@@ -593,45 +595,69 @@ RadioSubscription::RadioSubscription(const uint64_t id, const std::string &url,
 }
 
 void RadioSubscription::start() {
-	if (url_type_ == UrlType::WebSocket) {
-		auto webSocket = std::make_unique<ix::WebSocket>();
-		webSocket->setUrl(url_);
-		webSocket->start();
-		connection = std::move(webSocket);
-	} else if (url_type_ == UrlType::Redis) {
-		auto redis_url = normalize_redis_url(url_);
-		if (redis_url.empty()) {
-			throw InvalidInputException("Invalid Redis URL: " + url_);
+	try {
+		if (url_type_ == UrlType::WebSocket) {
+			auto websocket = std::make_unique<ix::WebSocket>();
+			websocket->setUrl(url_);
+			connection = std::move(websocket);
+
+			// Install the callback before start() can emit Open/Error events.
+			received_messages_.start();
+			std::get<std::unique_ptr<ix::WebSocket>>(connection)->start();
+			transmit_messages_.start();
+			return;
 		}
+		if (url_type_ == UrlType::Redis) {
+			auto redis_url = normalize_redis_url(url_);
+			if (redis_url.empty()) {
+				throw InvalidInputException("Invalid Redis URL: " + url_);
+			}
 
-		redis_url = remove_query_param(redis_url, "channel");
+			redis_url = remove_query_param(redis_url, "channel");
+			auto channel_name = get_query_param(url_, "channel");
+			if (channel_name.empty()) {
+				throw InvalidInputException("No channel specified in Redis URL: " + url_);
+			}
 
-		auto parsed_channel_name_ = get_query_param(url_, "channel");
-		if (parsed_channel_name_.empty()) {
-			throw InvalidInputException("No channel specified in Redis URL: " + url_);
+			sw::redis::Uri uri(redis_url);
+			auto options = uri.connection_options();
+			// consume() must periodically wake so shutdown can join deterministically.
+			if (options.socket_timeout.count() == 0) {
+				options.socket_timeout = std::chrono::milliseconds(100);
+			}
+			auto redis_client = std::make_unique<sw::redis::Redis>(options, uri.connection_pool_options());
+			connection = RedisSubscription {std::move(redis_client), std::move(channel_name)};
+			received_messages_.start();
+			transmit_messages_.start();
+			return;
 		}
-
-		auto redis_client = std::make_unique<sw::redis::Redis>(redis_url);
-
-		this->activation_time_ = RadioCurrentTimeMillis();
-		connection = RedisSubscription {std::move(redis_client), nullptr, parsed_channel_name_};
-	} else {
 		throw InvalidInputException("Unsupported URL type for RadioSubscription: " + url_);
+	} catch (...) {
+		stop();
+		throw;
 	}
-	this->transmit_messages_.start();
-	this->received_messages_.start();
 }
 
-void RadioSubscription::stop() {
-	if (is_stopped_) {
+void RadioSubscription::stop() noexcept {
+	if (is_stopped_.exchange(true)) {
 		return;
 	}
-	is_stopped_ = true;
-	transmit_messages_.stop();
-	received_messages_.stop();
-	if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(connection)) {
-		auto &webSocket = std::get<std::unique_ptr<ix::WebSocket>>(connection);
-		webSocket->stop();
+	try {
+		transmit_messages_.stop();
+	} catch (...) {
+	}
+	try {
+		received_messages_.stop();
+	} catch (...) {
+	}
+	try {
+		if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(connection)) {
+			auto &websocket = std::get<std::unique_ptr<ix::WebSocket>>(connection);
+			if (websocket) {
+				websocket->stop();
+			}
+		}
+	} catch (...) {
 	}
 }
 
@@ -647,8 +673,9 @@ void RadioSubscription::add_received_messages(std::vector<RadioReceiveMessagePar
 		if (message_ids) {
 			message_ids[i] = message_id;
 		}
-		auto entry = std::make_shared<RadioReceivedMessage>(*this, message_id, messages[i].type, messages[i].channel,
-		                                                    messages[i].message, messages[i].receive_time);
+		auto entry =
+		    std::make_shared<RadioReceivedMessage>(id_, url_, message_id, messages[i].type, messages[i].channel,
+		                                           messages[i].message, messages[i].receive_time);
 
 		items.push_back(entry);
 	}

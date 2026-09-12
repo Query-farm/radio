@@ -4,8 +4,6 @@
 
 namespace duckdb {
 
-class RadioSubscription;
-
 class RadioReceivedMessage {
 public:
 	enum class MessageType { Message, Error, Connection, Disconnection };
@@ -22,15 +20,15 @@ public:
 		return it->second;
 	}
 
-	static uint16_t message_type_to_enum_index(const MessageType type) {
-		return static_cast<uint16_t>(type);
+	static uint8_t message_type_to_enum_index(const MessageType type) {
+		return static_cast<uint8_t>(type);
 	}
 
-	explicit RadioReceivedMessage(RadioSubscription &subscription, const uint64_t id, const MessageType type,
-	                              const std::optional<std::string> channel, const std::string &message,
-	                              const uint64_t receive_time)
-	    : subscription_(subscription), id_(id), type_(type), channel_(std::move(channel)), message_(std::move(message)),
-	      receive_time_(receive_time) {
+	explicit RadioReceivedMessage(const uint64_t subscription_id, std::string subscription_url, const uint64_t id,
+	                              const MessageType type, const std::optional<std::string> channel,
+	                              const std::string &message, const uint64_t receive_time)
+	    : subscription_id_(subscription_id), subscription_url_(std::move(subscription_url)), id_(id), type_(type),
+	      channel_(std::move(channel)), message_(std::move(message)), receive_time_(receive_time) {
 	}
 
 	void increment_seen_count() {
@@ -61,13 +59,18 @@ public:
 		return id_;
 	}
 
-	[[nodiscard]] RadioSubscription &subscription() const {
-		return subscription_;
+	[[nodiscard]] uint64_t subscription_id() const {
+		return subscription_id_;
+	}
+
+	[[nodiscard]] const std::string &subscription_url() const {
+		return subscription_url_;
 	}
 
 private:
-	// Store the ID of the message, it never changes and is relative to the subscription.
-	RadioSubscription &subscription_;
+	// Snapshots can outlive an unsubscribe on another connection.
+	const uint64_t subscription_id_;
+	const std::string subscription_url_;
 	const uint64_t id_;
 
 	const MessageType type_;

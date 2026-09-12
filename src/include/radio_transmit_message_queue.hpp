@@ -3,7 +3,7 @@
 #include "radio_transmit_message.hpp"
 #include "radio_utils.hpp"
 #include <algorithm>
-#include <IXWebSocket.h>
+#include <ixwebsocket/IXWebSocket.h>
 #include "redis_subscription.hpp"
 namespace duckdb {
 
@@ -98,6 +98,7 @@ private:
 
 	mutable std::mutex mtx;
 	std::atomic<bool> stop_flag_;
+	size_t active_sends_ = 0;
 
 	std::thread sender_thread_;
 };

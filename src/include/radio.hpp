@@ -1,16 +1,20 @@
 
 #pragma once
-#include "radio_extension.hpp"
+#include "duckdb.hpp"
+#include "duckdb/storage/object_cache.hpp"
 #include "radio_subscription_parameters.hpp"
 
 namespace duckdb {
 
 class RadioSubscription;
-class Radio {
-
+class Radio : public ObjectCacheEntry {
 public:
-	explicit Radio() {
-	}
+	Radio() = default;
+	~Radio() override;
+
+	static string ObjectType();
+	string GetObjectType() override;
+	optional_idx GetEstimatedCacheMemory() const override;
 
 	// These are all of the subscriptions that are currently activate.
 	const std::vector<std::shared_ptr<RadioSubscription>> GetSubscriptions();
@@ -28,6 +32,7 @@ public:
 	bool IsActivelyTuned(const std::string &url);
 
 	void turnoff();
+	void Shutdown() noexcept;
 
 	// Notify listeners that a message has arrived on some subscription.
 	void NotifyHasMessages();
@@ -46,5 +51,6 @@ private:
 	bool has_any_messages_ = false;
 
 	uint64_t subscription_id_ = 0;
+	bool shutting_down_ = false;
 };
 } // namespace duckdb

@@ -6,7 +6,7 @@
 #include "radio_transmit_message_queue.hpp"
 #include "radio.hpp"
 #include "radio_subscription_parameters.hpp"
-#include <IXWebSocket.h>
+#include <ixwebsocket/IXWebSocket.h>
 #include "redis_subscription.hpp"
 #include <optional>
 #include <variant>
@@ -37,7 +37,7 @@ public:
 	                           uint64_t creation_time, Radio &radio);
 
 	void start();
-	void stop();
+	void stop() noexcept;
 
 	~RadioSubscription();
 
@@ -85,7 +85,7 @@ public:
 	}
 
 	[[nodiscard]] bool disabled() const {
-		return disabled_;
+		return disabled_.load();
 	}
 
 	[[nodiscard]] bool has_unseen() const {
@@ -93,7 +93,7 @@ public:
 	}
 
 	void set_disabled(bool disabled) {
-		disabled_ = disabled;
+		disabled_.store(disabled);
 	}
 
 	void clear_received() {
@@ -116,7 +116,7 @@ public:
 		return transmit_messages_.flush_complete(timeout);
 	}
 
-	std::variant<std::unique_ptr<ix::WebSocket>, RedisSubscription> connection;
+	std::variant<std::monostate, std::unique_ptr<ix::WebSocket>, RedisSubscription> connection;
 
 	std::atomic<uint64_t> activation_time_ {0};
 
@@ -143,7 +143,7 @@ private:
 	// The time the subscription was activated.
 
 	// Indicate if this subscription should be disabled.
-	bool disabled_ = false;
+	std::atomic<bool> disabled_ {false};
 
 	// Keep a queue of messages here, so its easier to manage rather than a shared queue.
 	RadioReceivedMessageQueue received_messages_;
@@ -152,7 +152,7 @@ private:
 
 	Radio &radio_;
 
-	bool is_stopped_ = false;
+	std::atomic<bool> is_stopped_ {false};
 };
 
 void RadioSubscriptionAddFunctions(ExtensionLoader &loader);
