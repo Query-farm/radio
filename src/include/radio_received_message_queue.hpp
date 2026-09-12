@@ -2,7 +2,7 @@
 #include "radio_extension.hpp"
 #include "radio_received_message.hpp"
 #include "redis_subscription.hpp"
-#include <IXWebSocket.h>
+#include <ixwebsocket/IXWebSocket.h>
 #include <iostream>
 
 namespace duckdb {

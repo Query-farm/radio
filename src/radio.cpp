@@ -4,6 +4,18 @@
 
 namespace duckdb {
 
+Radio::~Radio() {
+	Shutdown();
+}
+
+string Radio::ObjectType() {
+	return "radio_state";
+}
+
+string Radio::GetObjectType() {
+	return ObjectType();
+}
+
 const std::vector<std::shared_ptr<RadioSubscription>> Radio::GetSubscriptions() {
 	std::lock_guard<std::mutex> lock(mtx);
 
@@ -18,43 +30,70 @@ const std::vector<std::shared_ptr<RadioSubscription>> Radio::GetSubscriptions() 
 std::shared_ptr<RadioSubscription> Radio::AddSubscription(const std::string &url,
                                                           const RadioSubscriptionParameters &params,
                                                           const uint64_t creation_time) {
-	// Check to see if we're already subscribed to this url.
-	std::lock_guard<std::mutex> lock(mtx);
-
-	auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(),
-	                       [&url](const auto &sub) { return sub.second->url() == url; });
-	if (it != subscriptions_.end()) {
-		// We are already subscribed to this URL, so we can just return.
-		return it->second;
+	uint64_t new_id;
+	{
+		std::lock_guard<std::mutex> lock(mtx);
+		if (shutting_down_) {
+			throw InvalidInputException("Radio is shutting down");
+		}
+		auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(),
+		                       [&url](const auto &sub) { return sub.second->url() == url; });
+		if (it != subscriptions_.end()) {
+			return it->second;
+		}
+		new_id = subscription_id_++;
 	}
-	auto new_id = subscription_id_++;
-	subscriptions_[new_id] = std::make_shared<RadioSubscription>(new_id, url, params, creation_time, *this);
-	subscriptions_[new_id]->start();
-	return subscriptions_[new_id];
+
+	// Starting a transport can invoke a callback immediately. Do not hold the
+	// Radio mutex here: callbacks call NotifyHasMessages(), which takes it too.
+	auto candidate = std::make_shared<RadioSubscription>(new_id, url, params, creation_time, *this);
+	candidate->start();
+
+	std::shared_ptr<RadioSubscription> existing;
+	bool shutting_down;
+	{
+		std::lock_guard<std::mutex> lock(mtx);
+		shutting_down = shutting_down_;
+		if (!shutting_down) {
+			auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(),
+			                       [&url](const auto &sub) { return sub.second->url() == url; });
+			if (it == subscriptions_.end()) {
+				subscriptions_[new_id] = candidate;
+				return candidate;
+			}
+			existing = it->second;
+		}
+	}
+
+	// Another connection won a concurrent subscribe, or database shutdown
+	// began while this transport was starting.
+	candidate->stop();
+	if (shutting_down) {
+		throw InvalidInputException("Radio is shutting down");
+	}
+	return existing;
 }
 
 void Radio::RemoveSubscription(std::shared_ptr<RadioSubscription> subscription) {
-	std::lock_guard<std::mutex> lock(mtx);
-
-	auto it = subscriptions_.find(subscription->id());
-	if (it != subscriptions_.end()) {
-		auto removed = std::move(it->second);
-		removed->stop();
-		subscriptions_.erase(it);
-	}
+	RemoveSubscription(subscription->id());
 }
 
 std::shared_ptr<RadioSubscription> Radio::RemoveSubscription(const uint64_t id) {
-	std::lock_guard<std::mutex> lock(mtx);
-
-	auto it = subscriptions_.find(id);
-	if (it != subscriptions_.end()) {
-		auto removed = std::move(it->second);
-		removed->stop();
+	std::shared_ptr<RadioSubscription> removed;
+	{
+		std::lock_guard<std::mutex> lock(mtx);
+		auto it = subscriptions_.find(id);
+		if (it == subscriptions_.end()) {
+			return nullptr;
+		}
+		removed = std::move(it->second);
 		subscriptions_.erase(it);
-		return removed;
 	}
-	return nullptr;
+
+	// A callback can arrive while the transport is being stopped. Stop outside
+	// the map lock so that callback notification cannot deadlock unsubscribe.
+	removed->stop();
+	return removed;
 }
 
 void Radio::turnoff() {
@@ -62,6 +101,34 @@ void Radio::turnoff() {
 
 	for (auto &sub : subscriptions_) {
 		sub.second->set_disabled(true);
+	}
+}
+
+void Radio::Shutdown() noexcept {
+	std::vector<std::shared_ptr<RadioSubscription>> subscriptions;
+	{
+		std::lock_guard<std::mutex> lock(mtx);
+		if (shutting_down_ && subscriptions_.empty()) {
+			return;
+		}
+		shutting_down_ = true;
+		has_any_messages_ = true;
+		for (auto &entry : subscriptions_) {
+			subscriptions.push_back(std::move(entry.second));
+		}
+		subscriptions_.clear();
+	}
+	cv.notify_all();
+
+	// Stop and join every worker while Radio's mutex and condition variable
+	// are still alive. Member destruction happens only after this returns.
+	for (auto &subscription : subscriptions) {
+		try {
+			subscription->stop();
+		} catch (...) {
+			// Destruction must not throw. Individual stop implementations are
+			// also noexcept; this is a final boundary around third-party code.
+		}
 	}
 }
 
@@ -105,9 +172,9 @@ void Radio::NotifyHasMessages() {
 bool Radio::WaitForMessages(std::chrono::milliseconds timeout) {
 	std::unique_lock<std::mutex> lock(mtx);
 	has_any_messages_ = false;
-	bool success = cv.wait_for(lock, timeout, [this] { return has_any_messages_; });
+	bool success = cv.wait_for(lock, timeout, [this] { return shutting_down_ || has_any_messages_; });
 
-	return success;
+	return success && has_any_messages_;
 }
 
 } // namespace duckdb
