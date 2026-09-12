@@ -5,19 +5,16 @@
 
 namespace duckdb {
 
-Radio &GetRadio();
+class ClientContext;
+class DatabaseInstance;
+
+Radio &GetRadio(ClientContext &context);
+Radio &GetRadio(DatabaseInstance &db);
 
 class RadioExtension : public Extension {
 public:
 	void Load(ExtensionLoader &loader) override;
 	std::string Name() override;
-
-	Radio &GetRadio() {
-		return radio_;
-	}
-
-private:
-	Radio radio_;
 };
 
 } // namespace duckdb

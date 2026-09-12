@@ -1,0 +1,45 @@
+# name: test/sql/radio_crash_regressions.test
+# description: Regression coverage for invalid setup and database-local Radio lifetime
+# group: [radio]
+
+require radio
+
+# A failed start used to leave a null WebSocket in the global subscription
+# map. Cleaning it up dereferenced null and crashed the process.
+statement error
+CALL radio_subscribe('not-a-radio-transport')
+----
+Invalid Input Error: Unsupported URL type for RadioSubscription: not-a-radio-transport
+
+query I
+SELECT count(*) FROM radio_subscriptions()
+----
+0
+
+# NaN/Infinity retry multipliers can overflow the retry-delay conversion.
+statement error
+CALL radio_subscribe('ws://127.0.0.1:1', transmit_retry_multiplier := 'Infinity'::DOUBLE)
+----
+Binder Error: radio_subscribe requires transmit_retry_multiplier to be finite and greater than 1.0
+
+query I
+SELECT count(*) FROM radio_subscriptions()
+----
+0
+
+# Starting and stopping an asynchronous connection must be safe even if it
+# never connects.
+query I
+CALL radio_subscribe('ws://127.0.0.1:1')
+----
+1
+
+query I
+CALL radio_unsubscribe('ws://127.0.0.1:1')
+----
+1
+
+query I
+SELECT count(*) FROM radio_subscriptions()
+----
+0

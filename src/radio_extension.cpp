@@ -17,9 +17,16 @@
 
 namespace duckdb {
 
-Radio &GetRadio() {
-	static Radio instance;
-	return instance;
+Radio &GetRadio(DatabaseInstance &db) {
+	auto radio = db.GetObjectCache().GetOrCreate<Radio>("radio");
+	if (!radio) {
+		throw InternalException("Could not initialize database-local Radio state");
+	}
+	return *radio;
+}
+
+Radio &GetRadio(ClientContext &context) {
+	return GetRadio(DatabaseInstance::GetDatabase(context));
 }
 
 static LogicalType CreateEnumType(const string &name, const vector<string> &members) {
@@ -50,7 +57,6 @@ struct RadioSubscribeBindData : public TableFunctionData {
 
 static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
-
 	auto url = input.inputs[0].GetValue<string>();
 
 	// FIXME: deal with the named parameters and the default values.
@@ -80,8 +86,9 @@ static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, Table
 			}
 		} else if (loption == "transmit_retry_multiplier") {
 			params.transmit_retry_multiplier = kv.second.GetValue<double>();
-			if (params.transmit_retry_multiplier <= 1.0) {
-				throw BinderException("radio_subscribe requires transmit_retry_multiplier to be greater than 1.0");
+			if (!std::isfinite(params.transmit_retry_multiplier) || params.transmit_retry_multiplier <= 1.0) {
+				throw BinderException(
+				    "radio_subscribe requires transmit_retry_multiplier to be finite and greater than 1.0");
 			}
 		} else if (loption == "transmit_retry_max_delay_ms") {
 			params.transmit_retry_max_delay_ms = kv.second.GetValue<int32_t>();
@@ -98,7 +105,7 @@ static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, Table
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
 
-	return make_uniq<RadioSubscribeBindData>(GetRadio(), url, params, creation_time);
+	return make_uniq<RadioSubscribeBindData>(GetRadio(context), url, params, creation_time);
 }
 
 void RadioSubscribe(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -132,13 +139,12 @@ struct RadioUnsubscribeBindData : public TableFunctionData {
 
 static unique_ptr<FunctionData> RadioUnsubscribeBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<string> &names) {
-
 	auto url = input.inputs[0].GetValue<string>();
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
 
-	return make_uniq<RadioUnsubscribeBindData>(GetRadio(), url);
+	return make_uniq<RadioUnsubscribeBindData>(GetRadio(context), url);
 }
 
 void RadioUnsubscribe(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -162,49 +168,6 @@ void RadioUnsubscribe(ClientContext &context, TableFunctionInput &data_p, DataCh
 	bind_data.radio_.RemoveSubscription(subscription->id());
 
 	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription->id();
-}
-
-inline void RadioUnsubscribeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &url_vector = args.data[0];
-
-	UnaryExecutor::Execute<string_t, uint64_t>(url_vector, result, args.size(), [&](string_t url) {
-		auto &radio = GetRadio();
-		auto subscription = radio.GetSubscription(url.GetString());
-		if (!subscription) {
-			throw InvalidInputException("No subscription found for URL: " + url.GetString());
-		}
-		radio.RemoveSubscription(subscription->id());
-
-		return subscription->id();
-	});
-}
-
-inline void RadioIsTunedFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &url_vector = args.data[0];
-
-	UnaryExecutor::Execute<string_t, bool>(url_vector, result, args.size(), [&](string_t url) {
-		auto &radio = GetRadio();
-		auto subscription = radio.GetSubscription(url.GetString());
-		if (!subscription) {
-			return false;
-		}
-		return true;
-	});
-}
-
-inline void RadioTransmitFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	// auto &url_vector = args.data[0];
-	// auto &message_vector = args.data[1];
-
-	// UnaryExecutor::Execute<string_t, string_t>(url_vector, result, args.size(), [&](string_t name) {
-	// 	return StringVector::AddString(result, "Quack " + name.GetString() + " 🐥");
-	// });
-}
-
-inline void RadioTurnOffFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	// UnaryExecutor::Execute<string_t, bool>(name_vector, result, args.size(), [&](string_t name) {
-	// 	return StringVector::AddString(result, "Quack " + name.GetString() + " 🐥");
-	// });
 }
 
 struct RadioSubscriptionsBindData : public TableFunctionData {
@@ -243,7 +206,7 @@ void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, Data
 	FlatVector::GetData<string_t>(output.data[1])[0] =
 	    StringVector::AddStringOrBlob(output.data[1], subscription->url());
 
-	FlatVector::GetData<uint64_t>(output.data[2])[0] = subscription->creation_time();
+	FlatVector::GetData<int64_t>(output.data[2])[0] = static_cast<int64_t>(subscription->creation_time());
 
 	STORE_NULLABLE_TIMESTAMP(output.data[3], subscription->activation_time());
 	FlatVector::GetData<bool>(output.data[4])[0] = subscription->disabled() ? 1 : 0;
@@ -266,7 +229,6 @@ void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, Data
 
 static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, TableFunctionBindInput &input,
                                                        vector<LogicalType> &return_types, vector<string> &names) {
-
 	// id
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
@@ -308,7 +270,7 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("transmit_failures");
 
-	return make_uniq<RadioSubscriptionsBindData>(GetRadio());
+	return make_uniq<RadioSubscriptionsBindData>(GetRadio(context));
 }
 
 struct RadioSleepBindData : public TableFunctionData {
@@ -389,7 +351,7 @@ static unique_ptr<FunctionData> RadioFlushBind(ClientContext &context, TableFunc
 	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
 	names.emplace_back("all_messages_flushed");
 
-	return make_uniq<RadioFlushBindData>(GetRadio(), duration_milliseconds);
+	return make_uniq<RadioFlushBindData>(GetRadio(context), duration_milliseconds);
 }
 
 void RadioFlush(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -466,7 +428,7 @@ static unique_ptr<FunctionData> RadioListenBind(ClientContext &context, TableFun
 	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
 	names.emplace_back("subscription_url");
 
-	return make_uniq<RadioListenBindData>(GetRadio(), wait_for_messages, duration_milliseconds);
+	return make_uniq<RadioListenBindData>(GetRadio(context), wait_for_messages, duration_milliseconds);
 }
 
 void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -570,7 +532,7 @@ static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("message");
 
-	return make_uniq<RadioReceivedMessagesBindData>(GetRadio());
+	return make_uniq<RadioReceivedMessagesBindData>(GetRadio(context));
 }
 
 void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -587,12 +549,10 @@ void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, D
 	auto &message = bind_data.messages_[bind_data.current_row++];
 	output.SetCardinality(1);
 
-	auto &subscription = message->subscription();
-
 	// From the subscription
-	FlatVector::GetData<uint64_t>(output.data[0])[0] = subscription.id();
+	FlatVector::GetData<uint64_t>(output.data[0])[0] = message->subscription_id();
 	FlatVector::GetData<string_t>(output.data[1])[0] =
-	    StringVector::AddStringOrBlob(output.data[1], subscription.url());
+	    StringVector::AddStringOrBlob(output.data[1], message->subscription_url());
 
 	// From the message
 	FlatVector::GetData<uint64_t>(output.data[2])[0] = message->id();
@@ -619,6 +579,9 @@ inline void RadioVersionFunction(DataChunk &args, ExpressionState &state, Vector
 
 static void LoadInternal(ExtensionLoader &loader) {
 	// There are a few functions for the radio extension to process.
+	// Database-local state is destroyed by DatabaseInstance::object_cache.reset(),
+	// before extension dependencies can be unloaded.
+	GetRadio(loader.GetDatabaseInstance());
 
 	// This should take an optional parameter for max number of messages.
 

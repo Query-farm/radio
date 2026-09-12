@@ -84,9 +84,13 @@ public:
 				s_.next_attempt_time = std::nullopt;
 			} else {
 				auto now = std::chrono::steady_clock::now();
-				const auto delay = std::min(
-				    static_cast<int32_t>(retry_initial_delay_ms * std::pow(retry_multiplier, s_.attempts_made)),
-				    retry_max_delay_ms);
+				// Clamp in floating point before converting. A large retry multiplier
+				// can make pow() return infinity; converting that directly to an
+				// integer is undefined behavior and used to terminate debug builds.
+				const auto unbounded_delay =
+				    static_cast<double>(retry_initial_delay_ms) * std::pow(retry_multiplier, s_.attempts_made);
+				const auto delay =
+				    static_cast<int64_t>(std::min(static_cast<double>(retry_max_delay_ms), unbounded_delay));
 
 				const auto next_attempt_time = now + std::chrono::milliseconds(delay);
 				if (next_attempt_time > send_expire_time_) {
