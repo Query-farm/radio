@@ -106,7 +106,13 @@ void RadioTransmitMessageQueue::senderLoop() {
 						if (!websocket) {
 							throw std::runtime_error("WebSocket is not initialized");
 						}
-						success = websocket->sendBinary(next_msg->message()).success;
+						// VARCHAR payloads are valid UTF-8 and go out as text frames (which JSON
+						// APIs such as Slack require); BLOB payloads keep using binary frames.
+						if (next_msg->is_text()) {
+							success = websocket->sendText(next_msg->message()).success;
+						} else {
+							success = websocket->sendBinary(next_msg->message()).success;
+						}
 						if (!success) {
 							result = "WebSocket send failed";
 						}

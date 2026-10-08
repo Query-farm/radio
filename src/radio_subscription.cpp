@@ -140,7 +140,11 @@ static unique_ptr<FunctionData> RadioSubscriptionReceivedMessageAddBind(ClientCo
 
 	const auto url = input.inputs[0].GetValue<string>();
 	const auto channel = input.inputs[1].GetValue<string>();
-	const auto message = input.inputs[2].GetValue<string>();
+	if (input.inputs[2].IsNull()) {
+		throw InvalidInputException("radio_subscription_received_message_add requires a non-NULL message");
+	}
+	// Use the raw bytes; GetValue<string>() would render a BLOB with \xNN escapes.
+	const auto message = StringValue::Get(input.inputs[2]);
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
@@ -384,10 +388,10 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 
 struct RadioTransmitMessageAddBindData : public TableFunctionData {
 	explicit RadioTransmitMessageAddBindData(Radio &radio, const string &url, const std::optional<std::string> &channel,
-	                                         const string &message, const uint32_t max_attempts,
+	                                         const string &message, const bool is_text, const uint32_t max_attempts,
 	                                         const int64_t expire_duration_ms)
-	    : radio_(radio), url_(url), channel_(channel), message_(message), max_attempts_(max_attempts),
-	      expire_duration_ms_(expire_duration_ms) {
+	    : radio_(radio), url_(url), channel_(channel), message_(message), is_text_(is_text),
+	      max_attempts_(max_attempts), expire_duration_ms_(expire_duration_ms) {
 	}
 
 	Radio &radio_;
@@ -395,6 +399,7 @@ struct RadioTransmitMessageAddBindData : public TableFunctionData {
 	const std::string url_;
 	const std::optional<std::string> channel_;
 	const std::string message_;
+	const bool is_text_;
 	const uint32_t max_attempts_;
 	const int64_t expire_duration_ms_;
 
@@ -412,7 +417,12 @@ static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &conte
 	if (!input.inputs[1].IsNull()) {
 		channel = input.inputs[1].GetValue<string>();
 	}
-	const auto message = input.inputs[2].GetValue<string>();
+	if (input.inputs[2].IsNull()) {
+		throw InvalidInputException("radio_transmit_message requires a non-NULL message");
+	}
+	// Use the raw bytes; GetValue<string>() would render a BLOB with \xNN escapes.
+	const auto message = StringValue::Get(input.inputs[2]);
+	const auto is_text = input.inputs[2].type().id() == LogicalTypeId::VARCHAR;
 	const auto max_attempts = input.inputs[3].GetValue<int32_t>();
 	if (max_attempts <= 0) {
 		throw InvalidInputException("max_attempts must be a positive integer");
@@ -427,8 +437,8 @@ static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &conte
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("message_id");
 
-	return make_uniq<RadioTransmitMessageAddBindData>(GetRadio(context), url, channel, message, max_attempts,
-	                                                  real_expire_time);
+	return make_uniq<RadioTransmitMessageAddBindData>(GetRadio(context), url, channel, message, is_text,
+	                                                  max_attempts, real_expire_time);
 }
 
 void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -452,6 +462,7 @@ void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p,
 	RadioTransmitMessageParts message_parts;
 	message_parts.channel = bind_data.channel_;
 	message_parts.message = bind_data.message_;
+	message_parts.is_text = bind_data.is_text_;
 	message_parts.expire_duration_ms = bind_data.expire_duration_ms_;
 	message_parts.max_attempts = bind_data.max_attempts_;
 
@@ -487,11 +498,14 @@ void RadioSubscriptionAddFunctions(ExtensionLoader &loader) {
 	                  RadioSubscriptionTransmitMessagesBind);
 	loader.RegisterFunction(transmit_messages_function);
 
-	auto transmit_message_add_function = TableFunction(
-	    "radio_transmit_message",
-	    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BLOB, LogicalType::INTEGER, LogicalType::INTERVAL},
-	    RadioTransmitMessageAdd, RadioTransmitMessageAddBind);
-	loader.RegisterFunction(transmit_message_add_function);
+	// VARCHAR messages are sent as WebSocket text frames, BLOB messages as binary frames.
+	TableFunctionSet transmit_message_add_set("radio_transmit_message");
+	for (auto &message_type : {LogicalType::VARCHAR, LogicalType::BLOB}) {
+		transmit_message_add_set.AddFunction(TableFunction(
+		    {LogicalType::VARCHAR, LogicalType::VARCHAR, message_type, LogicalType::INTEGER, LogicalType::INTERVAL},
+		    RadioTransmitMessageAdd, RadioTransmitMessageAddBind));
+	}
+	loader.RegisterFunction(transmit_message_add_set);
 }
 
 RadioSubscription::UrlType RadioSubscription::detect_url_type(const std::string &url) {
