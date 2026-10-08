@@ -106,7 +106,7 @@ void RadioTransmitMessageQueue::senderLoop() {
 						if (!websocket) {
 							throw std::runtime_error("WebSocket is not initialized");
 						}
-						success = websocket->sendBinary(next_msg->message()).success;
+						success = websocket->sendText(next_msg->message()).success;
 						if (!success) {
 							result = "WebSocket send failed";
 						}

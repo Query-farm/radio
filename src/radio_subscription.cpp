@@ -412,7 +412,7 @@ static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &conte
 	if (!input.inputs[1].IsNull()) {
 		channel = input.inputs[1].GetValue<string>();
 	}
-	const auto message = input.inputs[2].GetValue<string>();
+	const auto message = StringValue::Get(input.inputs[2]);
 	const auto max_attempts = input.inputs[3].GetValue<int32_t>();
 	if (max_attempts <= 0) {
 		throw InvalidInputException("max_attempts must be a positive integer");
