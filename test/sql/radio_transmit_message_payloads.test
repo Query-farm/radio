@@ -1,0 +1,61 @@
+# name: test/sql/radio_transmit_message_payloads.test
+# description: Message payloads keep their raw bytes and record the WebSocket frame type
+# group: [radio]
+
+require radio
+
+# The subscription never connects, so queued messages stay PENDING for inspection.
+statement ok
+CALL radio_subscribe('ws://127.0.0.1:1')
+
+# A NULL message is a user error, not an internal error.
+statement error
+CALL radio_transmit_message('ws://127.0.0.1:1', NULL, NULL::BLOB, 3, INTERVAL '1 minute')
+----
+Invalid Input Error: radio_transmit_message requires a non-NULL message
+
+statement error
+CALL radio_transmit_message('ws://127.0.0.1:1', NULL, NULL::VARCHAR, 3, INTERVAL '1 minute')
+----
+Invalid Input Error: radio_transmit_message requires a non-NULL message
+
+statement error
+CALL radio_subscription_received_message_add('ws://127.0.0.1:1', 'c', NULL::BLOB)
+----
+Invalid Input Error: radio_subscription_received_message_add requires a non-NULL message
+
+# VARCHAR (text frame) and BLOB (binary frame) payloads are both stored byte-for-byte;
+# quotes must not be escaped as \x22.
+statement ok
+CALL radio_transmit_message('ws://127.0.0.1:1', NULL, '{"envelope_id":"ack-123"}', 3, INTERVAL '1 hour')
+
+statement ok
+CALL radio_transmit_message('ws://127.0.0.1:1', NULL, '{"envelope_id":"ack-456"}'::BLOB, 3, INTERVAL '1 hour')
+
+statement ok
+CALL radio_transmit_message('ws://127.0.0.1:1', NULL, '\x00\xFF\x81'::BLOB, 3, INTERVAL '1 hour')
+
+query II
+SELECT octet_length(message), message = '{"envelope_id":"ack-123"}'::BLOB
+FROM radio_subscription_transmit_messages('ws://127.0.0.1:1')
+ORDER BY message_id
+LIMIT 1
+----
+25	true
+
+query I
+SELECT list(octet_length(message) ORDER BY message_id)
+FROM radio_subscription_transmit_messages('ws://127.0.0.1:1')
+----
+[25, 25, 3]
+
+statement ok
+CALL radio_subscription_received_message_add('ws://127.0.0.1:1', 'c', '\x00\x01'::BLOB)
+
+query I
+SELECT octet_length(message) FROM radio_subscription_received_messages('ws://127.0.0.1:1') WHERE channel = 'c'
+----
+2
+
+statement ok
+CALL radio_unsubscribe('ws://127.0.0.1:1')

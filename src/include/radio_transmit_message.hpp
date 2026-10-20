@@ -10,6 +10,8 @@ struct RadioTransmitMessageParts {
 	std::string message;
 	uint64_t expire_duration_ms;
 	uint32_t max_attempts;
+	// WebSocket frame type to use: text for VARCHAR payloads, binary for BLOB.
+	bool is_text = false;
 };
 
 // The state of the message, proceeds PENDING, SENDING, SENT.
@@ -38,7 +40,7 @@ public:
 	                              const RadioTransmitMessageParts &parts)
 	    : id_(id), channel_(std::move(parts.channel)), message_(std::move(parts.message)),
 	      creation_time_(creation_time), max_attempts_(parts.max_attempts),
-	      expire_duration_ms_(parts.expire_duration_ms) {
+	      expire_duration_ms_(parts.expire_duration_ms), is_text_(parts.is_text) {
 		D_ASSERT(max_attempts_ > 0);
 		const auto now = std::chrono::steady_clock::now();
 		send_expire_time_ = now + std::chrono::milliseconds(parts.expire_duration_ms);
@@ -51,6 +53,10 @@ public:
 
 	[[nodiscard]] const std::string &message() const {
 		return message_;
+	}
+
+	[[nodiscard]] bool is_text() const {
+		return is_text_;
 	}
 
 	[[nodiscard]] uint64_t creation_time() const {
@@ -145,6 +151,7 @@ private:
 	std::chrono::steady_clock::time_point send_expire_time_;
 
 	const uint32_t expire_duration_ms_;
+	const bool is_text_;
 
 	RadioTransmitMessageState state_;
 };
