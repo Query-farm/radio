@@ -623,7 +623,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	RadioSubscriptionAddFunctions(loader);
 
-	QueryFarmSendTelemetry(loader, "radio", "2026072501");
+	QueryFarmSendTelemetry(loader, "radio", "2026102001");
 }
 
 void RadioExtension::Load(ExtensionLoader &loader) {
