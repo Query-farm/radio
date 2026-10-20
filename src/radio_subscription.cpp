@@ -27,7 +27,7 @@ struct RadioSubscriptionTransmitMessagesDeleteBindData : public TableFunctionDat
 static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesDeleteBind(ClientContext &context,
                                                                             TableFunctionBindInput &input,
                                                                             vector<LogicalType> &return_types,
-                                                                            vector<string> &names) {
+                                                                            vector<Identifier> &names) {
 	if (input.inputs.size() != 2) {
 		throw BinderException("radio_subscription_transmit_message_delete requires 2 arguments");
 	}
@@ -47,7 +47,7 @@ void RadioSubscriptionTransmitMessagesDelete(ClientContext &context, TableFuncti
 
 	if (bind_data.did_delete) {
 		// If we already added the message, just return no rows.
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 
@@ -59,8 +59,8 @@ void RadioSubscriptionTransmitMessagesDelete(ClientContext &context, TableFuncti
 	}
 
 	subscription->transmit_messages_delete_by_ids({bind_data.id_});
-	output.SetCardinality(1);
-	FlatVector::GetData<bool>(output.data[0])[0] = true;
+	output.SetChildCardinality(1);
+	FlatVector::GetDataMutable<bool>(output.data[0])[0] = true;
 }
 
 struct RadioSubscriptionTransmitMessagesDeleteFinishedBindData : public TableFunctionData {
@@ -77,7 +77,7 @@ struct RadioSubscriptionTransmitMessagesDeleteFinishedBindData : public TableFun
 static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesDeleteFinishedBind(ClientContext &context,
                                                                                     TableFunctionBindInput &input,
                                                                                     vector<LogicalType> &return_types,
-                                                                                    vector<string> &names) {
+                                                                                    vector<Identifier> &names) {
 	if (input.inputs.size() != 1) {
 		throw BinderException("radio_subscription_transmit_messages_delete_finished requires 1 argument");
 	}
@@ -97,7 +97,7 @@ void RadioSubscriptionTransmitMessagesDeleteFinished(ClientContext &context, Tab
 
 	if (bind_data.did_delete) {
 		// If we already added the message, just return no rows.
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 
@@ -109,8 +109,8 @@ void RadioSubscriptionTransmitMessagesDeleteFinished(ClientContext &context, Tab
 	}
 
 	subscription->transmit_messages_delete_finished();
-	output.SetCardinality(1);
-	FlatVector::GetData<bool>(output.data[0])[0] = true;
+	output.SetChildCardinality(1);
+	FlatVector::GetDataMutable<bool>(output.data[0])[0] = true;
 }
 
 struct RadioSubscriptionReceivedMessageAddBindData : public TableFunctionData {
@@ -133,7 +133,7 @@ struct RadioSubscriptionReceivedMessageAddBindData : public TableFunctionData {
 static unique_ptr<FunctionData> RadioSubscriptionReceivedMessageAddBind(ClientContext &context,
                                                                         TableFunctionBindInput &input,
                                                                         vector<LogicalType> &return_types,
-                                                                        vector<string> &names) {
+                                                                        vector<Identifier> &names) {
 	if (input.inputs.size() != 3) {
 		throw BinderException("radio_subscription_received_message_add requires 3 arguments");
 	}
@@ -159,7 +159,7 @@ void RadioSubscriptionReceivedMessageAdd(ClientContext &context, TableFunctionIn
 
 	if (bind_data.did_add) {
 		// If we already added the message, just return no rows.
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 	bind_data.did_add = true;
@@ -174,8 +174,8 @@ void RadioSubscriptionReceivedMessageAdd(ClientContext &context, TableFunctionIn
 	parts.push_back({bind_data.message_type_, bind_data.channel_, bind_data.message_, RadioCurrentTimeMillis()});
 	subscription->add_received_messages(parts, &message_id);
 
-	output.SetCardinality(1);
-	FlatVector::GetData<uint64_t>(output.data[0])[0] = message_id;
+	output.SetChildCardinality(1);
+	FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = message_id;
 }
 
 struct RadioSubscriptionReceivedMessagesBindData : public TableFunctionData {
@@ -194,7 +194,7 @@ struct RadioSubscriptionReceivedMessagesBindData : public TableFunctionData {
 static unique_ptr<FunctionData> RadioSubscriptionReceivedMessagesBind(ClientContext &context,
                                                                       TableFunctionBindInput &input,
                                                                       vector<LogicalType> &return_types,
-                                                                      vector<string> &names) {
+                                                                      vector<Identifier> &names) {
 	if (input.inputs.size() != 1) {
 		throw BinderException("radio_subscription_received_messages requires 1 argument");
 	}
@@ -230,25 +230,25 @@ void RadioSubscriptionReceivedMessages(ClientContext &context, TableFunctionInpu
 
 	if (bind_data.current_row >= bind_data.messages_.size()) {
 		// No more messages to return.
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 
 	// Return a row at a time for now.
 	auto &message = bind_data.messages_[bind_data.current_row++];
-	output.SetCardinality(1);
+	output.SetChildCardinality(1);
 
-	FlatVector::GetData<uint64_t>(output.data[0])[0] = message->id();
-	FlatVector::GetData<int64_t>(output.data[1])[0] = static_cast<int64_t>(message->receive_time());
-	FlatVector::GetData<uint64_t>(output.data[2])[0] = message->seen_count();
+	FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = message->id();
+	FlatVector::GetDataMutable<int64_t>(output.data[1])[0] = static_cast<int64_t>(message->receive_time());
+	FlatVector::GetDataMutable<uint64_t>(output.data[2])[0] = message->seen_count();
 
 	if (message->channel().has_value()) {
-		FlatVector::GetData<string_t>(output.data[3])[0] =
+		FlatVector::GetDataMutable<string_t>(output.data[3])[0] =
 		    StringVector::AddStringOrBlob(output.data[3], message->channel().value());
 	} else {
 		FlatVector::SetNull(output.data[3], 0, true);
 	}
-	FlatVector::GetData<string_t>(output.data[4])[0] =
+	FlatVector::GetDataMutable<string_t>(output.data[4])[0] =
 	    StringVector::AddStringOrBlob(output.data[4], message->message());
 }
 
@@ -266,21 +266,18 @@ struct RadioSubscriptionTransmitMessagesBindData : public TableFunctionData {
 };
 
 static LogicalType CreateEnumType(const string &name, const vector<string> &members) {
-	auto varchar_vector = Vector(LogicalType::VARCHAR, members.size());
-	auto varchar_data = FlatVector::GetData<string_t>(varchar_vector);
+	Vector varchar_vector(LogicalType::VARCHAR, members.size());
+	auto writer = FlatVector::Writer<string_t>(varchar_vector, members.size());
 	for (idx_t i = 0; i < members.size(); i++) {
-		auto str = string_t(members[i]);
-		varchar_data[i] = str.IsInlined() ? str : StringVector::AddString(varchar_vector, str);
+		writer.WriteValue(string_t(members[i]));
 	}
-	auto enum_type = LogicalType::ENUM(name, varchar_vector, members.size());
-	enum_type.SetAlias(name);
-	return enum_type;
+	return LogicalType::ENUM(name, varchar_vector, members.size()).WithAlias(name);
 }
 
 static unique_ptr<FunctionData> RadioSubscriptionTransmitMessagesBind(ClientContext &context,
                                                                       TableFunctionBindInput &input,
                                                                       vector<LogicalType> &return_types,
-                                                                      vector<string> &names) {
+                                                                      vector<Identifier> &names) {
 	if (input.inputs.size() != 1) {
 		throw BinderException("radio_subscription_transmit_messages requires 1 argument");
 	}
@@ -334,18 +331,18 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 
 	if (bind_data.current_row >= bind_data.messages_.size()) {
 		// No more messages to return.
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 
 	// Return a row at a time for now.
 	auto &message = bind_data.messages_[bind_data.current_row++];
-	output.SetCardinality(1);
+	output.SetChildCardinality(1);
 
 	auto state = message->state();
 
-	FlatVector::GetData<uint64_t>(output.data[0])[0] = message->id();
-	FlatVector::GetData<int64_t>(output.data[1])[0] = static_cast<int64_t>(message->creation_time());
+	FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = message->id();
+	FlatVector::GetDataMutable<int64_t>(output.data[1])[0] = static_cast<int64_t>(message->creation_time());
 	STORE_NULLABLE_TIMESTAMP(output.data[2], state.last_attempt_start_time);
 	STORE_NULLABLE_TIMESTAMP(output.data[3], state.last_attempt_end_time);
 
@@ -367,22 +364,22 @@ void RadioSubscriptionTransmitMessages(ClientContext &context, TableFunctionInpu
 		state_idx = 4;
 		break;
 	}
-	FlatVector::GetData<uint8_t>(output.data[4])[0] = state_idx;
+	FlatVector::GetDataMutable<uint8_t>(output.data[4])[0] = state_idx;
 
-	FlatVector::GetData<uint32_t>(output.data[5])[0] = message->expire_duration_ms();
-	FlatVector::GetData<uint32_t>(output.data[6])[0] = message->max_attempts();
-	FlatVector::GetData<uint32_t>(output.data[7])[0] = state.attempts_made;
+	FlatVector::GetDataMutable<uint32_t>(output.data[5])[0] = message->expire_duration_ms();
+	FlatVector::GetDataMutable<uint32_t>(output.data[6])[0] = message->max_attempts();
+	FlatVector::GetDataMutable<uint32_t>(output.data[7])[0] = state.attempts_made;
 
 	if (message->channel().has_value()) {
-		FlatVector::GetData<string_t>(output.data[8])[0] =
+		FlatVector::GetDataMutable<string_t>(output.data[8])[0] =
 		    StringVector::AddStringOrBlob(output.data[8], message->channel().value());
 	} else {
 		FlatVector::SetNull(output.data[8], 0, true);
 	}
 
-	FlatVector::GetData<string_t>(output.data[9])[0] =
+	FlatVector::GetDataMutable<string_t>(output.data[9])[0] =
 	    StringVector::AddStringOrBlob(output.data[9], message->message());
-	FlatVector::GetData<string_t>(output.data[10])[0] =
+	FlatVector::GetDataMutable<string_t>(output.data[10])[0] =
 	    StringVector::AddStringOrBlob(output.data[10], state.transmit_result);
 }
 
@@ -407,7 +404,8 @@ struct RadioTransmitMessageAddBindData : public TableFunctionData {
 };
 
 static unique_ptr<FunctionData> RadioTransmitMessageAddBind(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types, vector<string> &names) {
+                                                            vector<LogicalType> &return_types,
+                                                            vector<Identifier> &names) {
 	if (input.inputs.size() != 5) {
 		throw BinderException("radio_transmit_message requires 5 arguments");
 	}
@@ -447,7 +445,7 @@ void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p,
 
 	if (bind_data.did_add) {
 		// If we already added the message, just return no rows.
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 	bind_data.did_add = true;
@@ -468,8 +466,8 @@ void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p,
 
 	subscription->add_transmit_messages({message_parts}, &message_id);
 
-	output.SetCardinality(1);
-	FlatVector::GetData<uint64_t>(output.data[0])[0] = message_id;
+	output.SetChildCardinality(1);
+	FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = message_id;
 }
 
 void RadioSubscriptionAddFunctions(ExtensionLoader &loader) {
