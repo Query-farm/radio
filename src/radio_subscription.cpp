@@ -472,27 +472,33 @@ void RadioTransmitMessageAdd(ClientContext &context, TableFunctionInput &data_p,
 
 void RadioSubscriptionAddFunctions(ExtensionLoader &loader) {
 	auto received_message_add_function = TableFunction(
-	    "radio_subscription_received_message_add", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BLOB},
+	    "radio_subscription_received_message_add",
+	    TableSignature({Positional("url", LogicalType::VARCHAR), Positional("channel", LogicalType::VARCHAR),
+	                    Positional("message", LogicalType::BLOB)}),
 	    RadioSubscriptionReceivedMessageAdd, RadioSubscriptionReceivedMessageAddBind);
 	loader.RegisterFunction(received_message_add_function);
 
 	auto transmit_messages_delete_finished = TableFunction(
-	    "radio_subscription_transmit_messages_delete_finished", {LogicalType::VARCHAR},
+	    "radio_subscription_transmit_messages_delete_finished", TableSignature({Positional("url", LogicalType::VARCHAR)}),
 	    RadioSubscriptionTransmitMessagesDeleteFinished, RadioSubscriptionTransmitMessagesDeleteFinishedBind);
 	loader.RegisterFunction(transmit_messages_delete_finished);
 
 	auto transmit_messages_delete =
-	    TableFunction("radio_subscription_transmit_message_delete", {LogicalType::VARCHAR, LogicalType::UBIGINT},
+	    TableFunction("radio_subscription_transmit_message_delete",
+	                  TableSignature({Positional("url", LogicalType::VARCHAR),
+	                                  Positional("message_id", LogicalType::UBIGINT)}),
 	                  RadioSubscriptionTransmitMessagesDelete, RadioSubscriptionTransmitMessagesDeleteBind);
 	loader.RegisterFunction(transmit_messages_delete);
 
 	auto received_messages_function =
-	    TableFunction("radio_subscription_received_messages", {LogicalType::VARCHAR}, RadioSubscriptionReceivedMessages,
+	    TableFunction("radio_subscription_received_messages", TableSignature({Positional("url", LogicalType::VARCHAR)}),
+	                  RadioSubscriptionReceivedMessages,
 	                  RadioSubscriptionReceivedMessagesBind);
 	loader.RegisterFunction(received_messages_function);
 
 	auto transmit_messages_function =
-	    TableFunction("radio_subscription_transmit_messages", {LogicalType::VARCHAR}, RadioSubscriptionTransmitMessages,
+	    TableFunction("radio_subscription_transmit_messages", TableSignature({Positional("url", LogicalType::VARCHAR)}),
+	                  RadioSubscriptionTransmitMessages,
 	                  RadioSubscriptionTransmitMessagesBind);
 	loader.RegisterFunction(transmit_messages_function);
 
@@ -500,7 +506,9 @@ void RadioSubscriptionAddFunctions(ExtensionLoader &loader) {
 	TableFunctionSet transmit_message_add_set("radio_transmit_message");
 	for (auto &message_type : {LogicalType::VARCHAR, LogicalType::BLOB}) {
 		transmit_message_add_set.AddFunction(TableFunction(
-		    {LogicalType::VARCHAR, LogicalType::VARCHAR, message_type, LogicalType::INTEGER, LogicalType::INTERVAL},
+		    TableSignature({Positional("url", LogicalType::VARCHAR), Positional("channel", LogicalType::VARCHAR),
+		                    Positional("message", message_type), Positional("max_attempts", LogicalType::INTEGER),
+		                    Positional("expire_duration", LogicalType::INTERVAL)}),
 		    RadioTransmitMessageAdd, RadioTransmitMessageAddBind));
 	}
 	loader.RegisterFunction(transmit_message_add_set);

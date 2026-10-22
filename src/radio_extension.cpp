@@ -585,7 +585,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// This should take an optional parameter for max number of messages.
 
 	auto subscribe_function =
-	    TableFunction("radio_subscribe", {LogicalType::VARCHAR}, RadioSubscribe, RadioSubscribeBind);
+	    TableFunction("radio_subscribe", TableSignature({Positional("url", LogicalType::VARCHAR)}), RadioSubscribe,
+	                  RadioSubscribeBind);
 	// Optional named parameters: a call that leaves one out does not pass it.
 	subscribe_function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
 		options.Add("receive_message_capacity", LogicalType::INTEGER)
@@ -598,17 +599,22 @@ static void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(subscribe_function);
 
 	auto unsubscribe_function =
-	    TableFunction("radio_unsubscribe", {LogicalType::VARCHAR}, RadioUnsubscribe, RadioUnsubscribeBind);
+	    TableFunction("radio_unsubscribe", TableSignature({Positional("url", LogicalType::VARCHAR)}), RadioUnsubscribe,
+	                  RadioUnsubscribeBind);
 	loader.RegisterFunction(unsubscribe_function);
 
 	auto version_function = ScalarFunction("radio_version", {}, LogicalType::VARCHAR, RadioVersionFunction);
 	loader.RegisterFunction(version_function);
 
 	auto listen_function =
-	    TableFunction("radio_listen", {LogicalType::BOOLEAN, LogicalType::INTERVAL}, RadioListen, RadioListenBind);
+	    TableFunction("radio_listen",
+	                  TableSignature({Positional("wait_for_messages", LogicalType::BOOLEAN),
+	                                  Positional("timeout", LogicalType::INTERVAL)}),
+	                  RadioListen, RadioListenBind);
 	loader.RegisterFunction(listen_function);
 
-	auto flush_function = TableFunction("radio_flush", {LogicalType::INTERVAL}, RadioFlush, RadioFlushBind);
+	auto flush_function = TableFunction("radio_flush", TableSignature({Positional("timeout", LogicalType::INTERVAL)}),
+	                                   RadioFlush, RadioFlushBind);
 	loader.RegisterFunction(flush_function);
 
 	auto subscriptions_function = TableFunction("radio_subscriptions", {}, RadioSubscriptions, RadioSubscriptionsBind);
@@ -618,12 +624,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    TableFunction("radio_received_messages", {}, RadioReceivedMessages, RadioReceivedMessagesBind);
 	loader.RegisterFunction(received_messages_function);
 
-	auto sleep_function = TableFunction("radio_sleep", {LogicalType::INTERVAL}, RadioSleep, RadioSleepBind);
+	auto sleep_function = TableFunction("radio_sleep", TableSignature({Positional("duration", LogicalType::INTERVAL)}),
+	                                   RadioSleep, RadioSleepBind);
 	loader.RegisterFunction(sleep_function);
 
 	RadioSubscriptionAddFunctions(loader);
 
-	QueryFarmSendTelemetry(loader, "radio", "2026102001");
+	QueryFarmSendTelemetry(loader, "radio", "2026102101");
 }
 
 void RadioExtension::Load(ExtensionLoader &loader) {
