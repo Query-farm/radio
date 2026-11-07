@@ -6,14 +6,18 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
+#include <duckdb/parser/parsed_data/create_table_function_info.hpp>
 
 #include "radio_received_message.hpp"
 #include "radio_received_message_queue.hpp"
 #include "radio_subscription.hpp"
 #include "radio_utils.hpp"
 #include "radio.hpp"
+#include "radio_version.hpp"
 
 #include "query_farm_telemetry.hpp"
+
+#include <ixwebsocket/IXNetSystem.h>
 
 namespace duckdb {
 
@@ -29,6 +33,14 @@ Radio &GetRadio(ClientContext &context) {
 	return GetRadio(DatabaseInstance::GetDatabase(context));
 }
 
+FunctionDescription RadioDescribe(string description, vector<string> examples) {
+	FunctionDescription desc;
+	desc.description = std::move(description);
+	desc.examples = std::move(examples);
+	desc.categories = {"messaging"};
+	return desc;
+}
+
 static LogicalType CreateEnumType(const string &name, const vector<string> &members) {
 	Vector varchar_vector(LogicalType::VARCHAR, members.size());
 	auto writer = FlatVector::Writer<string_t>(varchar_vector, members.size());
@@ -39,47 +51,39 @@ static LogicalType CreateEnumType(const string &name, const vector<string> &memb
 }
 
 struct RadioSubscribeBindData : public TableFunctionData {
-	explicit RadioSubscribeBindData(Radio &radio, const string &url, RadioSubscriptionParameters &params,
-	                                uint64_t creation_time)
-	    : radio_(radio), url_(url), creation_time_(creation_time), params_(params) {
+	explicit RadioSubscribeBindData(const string &url, RadioSubscriptionParameters &params)
+	    : url_(url), params_(params) {
 	}
 
-	Radio &radio_;
 	string url_;
-	uint64_t creation_time_;
 	RadioSubscriptionParameters params_;
-
-	bool did_subscribe = false;
 };
 
 static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto url = input.inputs[0].GetValue<string>();
+	auto url = RadioRequireArgument(input, 0, "radio_subscribe", "url").GetValue<string>();
+	if (RadioSubscription::url_requires_network(url)) {
+		RadioCheckExternalAccess(context, "radio_subscribe");
+	}
 
-	// FIXME: deal with the named parameters and the default values.
 	RadioSubscriptionParameters params;
 
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first.GetIdentifierName());
+		if (kv.second.IsNull()) {
+			throw BinderException("radio_subscribe requires %s to be non-NULL", loption);
+		}
 		if (loption == "receive_message_capacity") {
 			params.receive_message_capacity = kv.second.GetValue<int32_t>();
 			if (params.receive_message_capacity <= 0) {
 				throw BinderException("radio_subscribe requires receive_message_capacity to be greater than 0");
 			}
-			// } else if (loption == "receive_error_capacity") {
-			// 	params.receive_error_capacity = kv.second.GetValue<int32_t>();
-			// 	if (params.receive_error_capacity <= 0) {
-			// 		throw BinderException("radio_subscribe requires receive_error_capacity to be greater than 0");
-			// 	}
-			// } else if (loption == "transmit_message_capacity") {
-			// 	params.transmit_message_capacity = kv.second.GetValue<int32_t>();
-			// 	if (params.transmit_message_capacity <= 0) {
-			// 		throw BinderException("radio_subscribe requires transmit_message_capacity to be greater than 0");
-			// 	}
 		} else if (loption == "transmit_retry_initial_delay_ms") {
 			params.transmit_retry_initial_delay_ms = kv.second.GetValue<int32_t>();
+			// A zero initial delay would stay zero after every backoff multiplication
+			// and retry a failing transport in a tight loop.
 			if (params.transmit_retry_initial_delay_ms <= 0) {
-				throw BinderException("radio_subscribe requires transmit_retry_initial_delay_ms to be non-negative");
+				throw BinderException("radio_subscribe requires transmit_retry_initial_delay_ms to be greater than 0");
 			}
 		} else if (loption == "transmit_retry_multiplier") {
 			params.transmit_retry_multiplier = kv.second.GetValue<double>();
@@ -97,131 +101,113 @@ static unique_ptr<FunctionData> RadioSubscribeBind(ClientContext &context, Table
 		}
 	}
 
-	auto creation_time = RadioCurrentTimeMillis();
-
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
 
-	return make_uniq<RadioSubscribeBindData>(GetRadio(context), url, params, creation_time);
+	return make_uniq<RadioSubscribeBindData>(url, params);
 }
 
 void RadioSubscribe(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioSubscribeBindData>();
-
-	if (bind_data.did_subscribe) {
-		// No more messages to return.
+	auto &bind_data = data_p.bind_data->Cast<RadioSubscribeBindData>();
+	auto &state = data_p.global_state->Cast<RadioSingleRowState>();
+	if (state.done) {
 		output.SetChildCardinality(0);
 		return;
 	}
+	state.done = true;
 
-	// Return a row at a time for now.
-	bind_data.did_subscribe = true;
-	output.SetChildCardinality(1);
-
-	auto subscription = bind_data.radio_.AddSubscription(bind_data.url_, bind_data.params_, bind_data.creation_time_);
+	// Checked again here: a prepared statement may run after access was disabled.
+	if (RadioSubscription::url_requires_network(bind_data.url_)) {
+		RadioCheckExternalAccess(context, "radio_subscribe");
+	}
+	auto subscription = GetRadio(context).AddSubscription(bind_data.url_, bind_data.params_, RadioCurrentTimeMillis());
 
 	FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = subscription->id();
+	output.SetChildCardinality(1);
 }
 
-struct RadioUnsubscribeBindData : public TableFunctionData {
-	explicit RadioUnsubscribeBindData(Radio &radio, const string &url) : radio_(radio), url_(url) {
+struct RadioUrlBindData : public TableFunctionData {
+	explicit RadioUrlBindData(const string &url) : url_(url) {
 	}
 
-	Radio &radio_;
 	string url_;
-
-	bool did_unsubscribe = false;
 };
 
 static unique_ptr<FunctionData> RadioUnsubscribeBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto url = input.inputs[0].GetValue<string>();
+	auto url = RadioRequireArgument(input, 0, "radio_unsubscribe", "url").GetValue<string>();
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
 
-	return make_uniq<RadioUnsubscribeBindData>(GetRadio(context), url);
+	return make_uniq<RadioUrlBindData>(url);
 }
 
 void RadioUnsubscribe(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioUnsubscribeBindData>();
-
-	if (bind_data.did_unsubscribe) {
-		// No more messages to return.
+	auto &bind_data = data_p.bind_data->Cast<RadioUrlBindData>();
+	auto &state = data_p.global_state->Cast<RadioSingleRowState>();
+	if (state.done) {
 		output.SetChildCardinality(0);
 		return;
 	}
+	state.done = true;
 
-	// Return a row at a time for now.
-	bind_data.did_unsubscribe = true;
-	output.SetChildCardinality(1);
-
-	auto subscription = bind_data.radio_.GetSubscription(bind_data.url_);
+	auto &radio = GetRadio(context);
+	auto subscription = radio.GetSubscription(bind_data.url_);
 	if (!subscription) {
 		throw InvalidInputException("No subscription found for URL: " + bind_data.url_);
 	}
-	bind_data.radio_.RemoveSubscription(subscription->id());
+	radio.RemoveSubscription(subscription->id());
 
 	FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = subscription->id();
+	output.SetChildCardinality(1);
 }
 
-struct RadioSubscriptionsBindData : public TableFunctionData {
-public:
-	RadioSubscriptionsBindData(Radio &radio) {
-		// Copy all subscriptions so we don't have to worry about changes
-		// while scanning.
-		subscriptions_ = radio.GetSubscriptions();
-	}
-
-	size_t rows_returned = 0;
-
-	std::vector<std::shared_ptr<RadioSubscription>> subscriptions_;
+// The subscriptions a scan returns, captured when the query executes (not
+// when it is bound) so that prepared statements see current state.
+struct RadioSubscriptionListState : public GlobalTableFunctionState {
+	std::vector<std::shared_ptr<RadioSubscription>> subscriptions;
+	idx_t offset = 0;
+	bool computed = false;
 };
 
-void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioSubscriptionsBindData>();
+static unique_ptr<GlobalTableFunctionState> RadioSubscriptionListInit(ClientContext &context,
+                                                                      TableFunctionInitInput &input) {
+	return make_uniq<RadioSubscriptionListState>();
+}
 
-	if (bind_data.rows_returned == bind_data.subscriptions_.size()) {
-		output.SetChildCardinality(0);
-		return;
+void RadioSubscriptions(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &state = data_p.global_state->Cast<RadioSubscriptionListState>();
+	if (!state.computed) {
+		state.subscriptions = GetRadio(context).GetSubscriptions();
+		state.computed = true;
 	}
 
-	// We can totally be lazy here and just return a single row per call
-	// rather than filling the entire vector since this is all in memory data
-	// and we can optimize this later.
-	output.SetChildCardinality(1);
+	idx_t count = 0;
+	while (state.offset < state.subscriptions.size() && count < STANDARD_VECTOR_SIZE) {
+		auto &subscription = state.subscriptions[state.offset++];
+		auto queue_state = subscription->state();
 
-	auto &subscription = bind_data.subscriptions_[bind_data.rows_returned++];
-
-	auto state = subscription->state();
-
-	FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = subscription->id();
-
-	FlatVector::GetDataMutable<string_t>(output.data[1])[0] =
-	    StringVector::AddStringOrBlob(output.data[1], subscription->url());
-
-	FlatVector::GetDataMutable<int64_t>(output.data[2])[0] = static_cast<int64_t>(subscription->creation_time());
-
-	STORE_NULLABLE_TIMESTAMP(output.data[3], subscription->activation_time());
-	FlatVector::GetDataMutable<bool>(output.data[4])[0] = subscription->disabled() ? 1 : 0;
-
-	STORE_NULLABLE_TIMESTAMP(output.data[5], state.received.latest_receive_time);
-
-	FlatVector::GetDataMutable<uint64_t>(output.data[6])[0] = state.received.odometer;
-
-	FlatVector::GetDataMutable<uint64_t>(output.data[7])[0] = state.transmit.odometer;
-
-	STORE_NULLABLE_TIMESTAMP(output.data[8], state.transmit.latest_queue_time);
-	STORE_NULLABLE_TIMESTAMP(output.data[9], state.transmit.latest_success_time);
-	STORE_NULLABLE_TIMESTAMP(output.data[10], state.transmit.latest_failure_time);
-
-	FlatVector::GetDataMutable<uint64_t>(output.data[11])[0] = state.transmit.successes;
-	FlatVector::GetDataMutable<uint64_t>(output.data[12])[0] = state.transmit.failures;
-
-	output.SetChildCardinality(1);
+		FlatVector::GetDataMutable<uint64_t>(output.data[0])[count] = subscription->id();
+		FlatVector::GetDataMutable<string_t>(output.data[1])[count] =
+		    StringVector::AddStringOrBlob(output.data[1], subscription->url());
+		FlatVector::GetDataMutable<int64_t>(output.data[2])[count] =
+		    static_cast<int64_t>(subscription->creation_time());
+		STORE_NULLABLE_TIMESTAMP(output.data[3], count, subscription->activation_time());
+		FlatVector::GetDataMutable<bool>(output.data[4])[count] = subscription->disabled();
+		STORE_NULLABLE_TIMESTAMP(output.data[5], count, queue_state.received.latest_receive_time);
+		FlatVector::GetDataMutable<uint64_t>(output.data[6])[count] = queue_state.received.odometer;
+		FlatVector::GetDataMutable<uint64_t>(output.data[7])[count] = queue_state.transmit.odometer;
+		STORE_NULLABLE_TIMESTAMP(output.data[8], count, queue_state.transmit.latest_queue_time);
+		STORE_NULLABLE_TIMESTAMP(output.data[9], count, queue_state.transmit.latest_success_time);
+		STORE_NULLABLE_TIMESTAMP(output.data[10], count, queue_state.transmit.latest_failure_time);
+		FlatVector::GetDataMutable<uint64_t>(output.data[11])[count] = queue_state.transmit.successes;
+		FlatVector::GetDataMutable<uint64_t>(output.data[12])[count] = queue_state.transmit.failures;
+		FlatVector::GetDataMutable<uint64_t>(output.data[13])[count] = subscription->receive_queue_size();
+		FlatVector::GetDataMutable<uint64_t>(output.data[14])[count] = queue_state.received.dropped_unseen;
+		count++;
+	}
+	output.SetChildCardinality(count);
 }
 
 static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -267,157 +253,118 @@ static unique_ptr<FunctionData> RadioSubscriptionsBind(ClientContext &context, T
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("transmit_failures");
 
-	return make_uniq<RadioSubscriptionsBindData>(GetRadio(context));
+	// The number of received messages currently held in the receive queue.
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("received_messages_queued");
+
+	// Received messages evicted from the full receive queue before any query read them.
+	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
+	names.emplace_back("received_messages_dropped_unseen");
+
+	return make_uniq<TableFunctionData>();
 }
 
-struct RadioSleepBindData : public TableFunctionData {
-public:
-	RadioSleepBindData(double duration_ms) : duration(duration_ms) {
+struct RadioIntervalBindData : public TableFunctionData {
+	explicit RadioIntervalBindData(int64_t duration_ms) : duration_ms(duration_ms) {
 	}
 
-	bool did_sleep = false;
-	double duration = 0.0;
+	const int64_t duration_ms;
 };
+
+static int64_t RadioBindNonNegativeInterval(const TableFunctionBindInput &input, idx_t index,
+                                            const char *function_name, const char *parameter_name) {
+	auto duration = RadioRequireArgument(input, index, function_name, parameter_name).GetValue<interval_t>();
+	auto milliseconds = Interval::GetMilli(duration);
+	if (milliseconds < 0) {
+		throw BinderException("%s requires %s to be a non-negative interval", function_name, parameter_name);
+	}
+	return milliseconds;
+}
 
 static unique_ptr<FunctionData> RadioSleepBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<Identifier> &names) {
-	if (input.inputs.size() != 1) {
-		throw BinderException("radio_sleep requires one argument");
-	}
-
-	auto duration = input.inputs[0].GetValue<interval_t>();
+	auto duration_ms = RadioBindNonNegativeInterval(input, 0, "radio_sleep", "duration");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
 	names.emplace_back("finished");
 
-	return make_uniq<RadioSleepBindData>(Interval::GetMilli(duration));
+	return make_uniq<RadioIntervalBindData>(duration_ms);
 }
 
 void RadioSleep(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioSleepBindData>();
-
-	if (bind_data.did_sleep) {
-		// No more messages to return.
+	auto &bind_data = data_p.bind_data->Cast<RadioIntervalBindData>();
+	auto &state = data_p.global_state->Cast<RadioSingleRowState>();
+	if (state.done) {
 		output.SetChildCardinality(0);
 		return;
 	}
+	state.done = true;
 
-	// Return a row at a time for now.
-	bind_data.did_sleep = true;
-	output.SetChildCardinality(1);
+	RadioInterruptibleSleepUntil(context,
+	                             std::chrono::steady_clock::now() + std::chrono::milliseconds(bind_data.duration_ms));
+
 	FlatVector::GetDataMutable<bool>(output.data[0])[0] = true;
-
-	// Sleep for the specified duration
-	std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int64_t>(bind_data.duration)));
+	output.SetChildCardinality(1);
 }
-
-struct RadioFlushBindData : public TableFunctionData {
-public:
-	RadioFlushBindData(Radio &radio, int64_t wait_timeout_ms)
-	    : wait_timeout_ms(wait_timeout_ms), returned_any_rows(false), radio(radio) {
-		// Copy all subscriptions so we don't have to worry about changes
-		// while scanning.
-		subscriptions_ = radio.GetSubscriptions();
-	}
-
-	size_t current_subscription_index = 0;
-
-	const int64_t wait_timeout_ms = 0;
-
-	bool returned_any_rows = false;
-
-	Radio &radio;
-
-	std::vector<std::shared_ptr<RadioSubscription>> subscriptions_;
-};
 
 static unique_ptr<FunctionData> RadioFlushBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<Identifier> &names) {
-	if (input.inputs.size() != 1) {
-		throw BinderException("radio_flush requires at least 1 argument");
-	}
-
-	auto duration = input.inputs[0].GetValue<interval_t>();
-
-	auto duration_milliseconds = Interval::GetMilli(duration);
-	if (duration_milliseconds < 0) {
-		throw BinderException("radio_flush requires the argument to be a non-negative interval");
-	}
+	auto timeout_ms = RadioBindNonNegativeInterval(input, 0, "radio_flush", "timeout");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
 	names.emplace_back("all_messages_flushed");
 
-	return make_uniq<RadioFlushBindData>(GetRadio(context), duration_milliseconds);
+	return make_uniq<RadioIntervalBindData>(timeout_ms);
 }
 
 void RadioFlush(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioFlushBindData>();
-
-	const auto now = std::chrono::steady_clock::now();
-	const auto finish_time = now + std::chrono::milliseconds(bind_data.wait_timeout_ms);
-
-	if (bind_data.returned_any_rows) {
-		// We already returned rows, so we don't need to do anything.
+	auto &bind_data = data_p.bind_data->Cast<RadioIntervalBindData>();
+	auto &state = data_p.global_state->Cast<RadioSingleRowState>();
+	if (state.done) {
 		output.SetChildCardinality(0);
 		return;
 	}
+	state.done = true;
 
-	bind_data.returned_any_rows = true;
-	output.SetChildCardinality(1);
+	const auto finish_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(bind_data.duration_ms);
 
-	for (auto &subscription : bind_data.subscriptions_) {
-		if (!subscription->flush_complete(finish_time)) {
-			FlatVector::GetDataMutable<bool>(output.data[0])[0] = 0;
-			return;
+	bool all_flushed = true;
+	for (auto &subscription : GetRadio(context).GetSubscriptions()) {
+		// Wait in short slices so the query can be interrupted.
+		while (true) {
+			RadioCheckInterrupted(context);
+			const auto now = std::chrono::steady_clock::now();
+			const auto slice_end = std::min(finish_time, now + RADIO_INTERRUPT_POLL_INTERVAL);
+			if (subscription->flush_complete(slice_end)) {
+				break;
+			}
+			if (slice_end >= finish_time) {
+				all_flushed = false;
+				break;
+			}
+		}
+		if (!all_flushed) {
+			break;
 		}
 	}
 
-	// Everything was flushed successfully, return a single row with true.
-	FlatVector::GetDataMutable<bool>(output.data[0])[0] = 1;
+	FlatVector::GetDataMutable<bool>(output.data[0])[0] = all_flushed;
+	output.SetChildCardinality(1);
 }
 
 struct RadioListenBindData : public TableFunctionData {
-public:
-	RadioListenBindData(Radio &radio, bool wait_for_messages, int64_t wait_timeout_ms)
-	    : wait_for_messages(wait_for_messages), wait_timeout_ms(wait_timeout_ms), returned_any_rows(false),
-	      radio(radio), last_loop_after_waiting(false) {
-		// Copy all subscriptions so we don't have to worry about changes
-		// while scanning.
-		subscriptions_ = radio.GetSubscriptions();
+	RadioListenBindData(bool wait_for_messages, int64_t wait_timeout_ms)
+	    : wait_for_messages(wait_for_messages), wait_timeout_ms(wait_timeout_ms) {
 	}
 
-	size_t current_subscription_index = 0;
-
-	bool wait_for_messages;
-
-	const int64_t wait_timeout_ms = 0;
-
-	bool returned_any_rows;
-
-	Radio &radio;
-
-	// Indicate we are looping through subscriptions one last time
-	// after waiting for a message to arrive.
-	bool last_loop_after_waiting = false;
-
-	std::vector<std::shared_ptr<RadioSubscription>> subscriptions_;
+	const bool wait_for_messages;
+	const int64_t wait_timeout_ms;
 };
 
 static unique_ptr<FunctionData> RadioListenBind(ClientContext &context, TableFunctionBindInput &input,
                                                 vector<LogicalType> &return_types, vector<Identifier> &names) {
-	if (input.inputs.size() < 2) {
-		throw BinderException("radio_listen requires at least 2 arguments");
-	}
-
-	auto wait_for_messages = input.inputs[0].GetValue<bool>();
-	auto duration = input.inputs[1].GetValue<interval_t>();
-
-	auto duration_milliseconds = Interval::GetMilli(duration);
-	if (duration_milliseconds < 0) {
-		throw BinderException("radio_listen requires the second argument to be a non-negative interval");
-	}
+	auto wait_for_messages = RadioRequireArgument(input, 0, "radio_listen", "wait_for_messages").GetValue<bool>();
+	auto timeout_ms = RadioBindNonNegativeInterval(input, 1, "radio_listen", "timeout");
 
 	return_types.emplace_back(LogicalType(LogicalTypeId::UBIGINT));
 	names.emplace_back("subscription_id");
@@ -425,82 +372,77 @@ static unique_ptr<FunctionData> RadioListenBind(ClientContext &context, TableFun
 	return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
 	names.emplace_back("subscription_url");
 
-	return make_uniq<RadioListenBindData>(GetRadio(context), wait_for_messages, duration_milliseconds);
+	return make_uniq<RadioListenBindData>(wait_for_messages, timeout_ms);
+}
+
+static std::vector<std::shared_ptr<RadioSubscription>> RadioSubscriptionsWithUnseenMessages(Radio &radio) {
+	std::vector<std::shared_ptr<RadioSubscription>> result;
+	for (auto &subscription : radio.GetSubscriptions()) {
+		if (subscription->has_unseen()) {
+			result.push_back(subscription);
+		}
+	}
+	return result;
 }
 
 void RadioListen(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioListenBindData>();
+	auto &bind_data = data_p.bind_data->Cast<RadioListenBindData>();
+	auto &state = data_p.global_state->Cast<RadioSubscriptionListState>();
 
-	auto check_subscriptions_for_messages = [&]() -> bool {
-		while (bind_data.current_subscription_index < bind_data.subscriptions_.size()) {
-			auto &subscription = bind_data.subscriptions_[bind_data.current_subscription_index++];
-
-			if (!subscription->has_unseen()) {
-				continue;
+	if (!state.computed) {
+		state.computed = true;
+		auto &radio = GetRadio(context);
+		const auto deadline =
+		    std::chrono::steady_clock::now() + std::chrono::milliseconds(bind_data.wait_timeout_ms);
+		while (true) {
+			// Read the generation before scanning: a message that arrives while
+			// scanning bumps it, so the wait below returns at once instead of
+			// sleeping for the full timeout.
+			const auto generation = radio.MessageGeneration();
+			state.subscriptions = RadioSubscriptionsWithUnseenMessages(radio);
+			if (!state.subscriptions.empty() || !bind_data.wait_for_messages) {
+				break;
 			}
-
-			output.SetChildCardinality(1);
-			FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = subscription->id();
-			FlatVector::GetDataMutable<string_t>(output.data[1])[0] =
-			    StringVector::AddStringOrBlob(output.data[1], subscription->url());
-			bind_data.returned_any_rows = true;
-			return true;
-		}
-		return false;
-	};
-
-	// If we're not waiting or we just finished waiting, try to process subscriptions immediately
-	if (!bind_data.wait_for_messages || bind_data.last_loop_after_waiting) {
-		if (!check_subscriptions_for_messages()) {
-			output.SetChildCardinality(0);
-		}
-		return;
-	}
-
-	// Loop through all subscriptions, if we any have messages they will
-	// be indicated in bind_data.returned_any_rows
-	if (check_subscriptions_for_messages()) {
-		return;
-	}
-
-	// When we iterated through subscriptions we didn't find messages.
-	//
-	// or we ran the last loop after waiting, and should just return
-	// that we didn't find anything.
-	if (!bind_data.returned_any_rows && !bind_data.last_loop_after_waiting) {
-		// Wait for messages with timeout
-		if (!bind_data.radio.WaitForMessages(std::chrono::milliseconds(bind_data.wait_timeout_ms))) {
-			// No messages found during the timeout, so no rows returned
-			// and no need to call again.
-			output.SetChildCardinality(0);
-			return;
-		} else {
-			// Loop through all subscriptions again.
-			bind_data.current_subscription_index = 0;
-			bind_data.last_loop_after_waiting = true;
-			check_subscriptions_for_messages();
-			return;
+			const auto now = std::chrono::steady_clock::now();
+			if (now >= deadline) {
+				break;
+			}
+			const auto slice = std::min<std::chrono::steady_clock::duration>(deadline - now,
+			                                                                 RADIO_INTERRUPT_POLL_INTERVAL);
+			radio.WaitForMessages(generation, std::chrono::duration_cast<std::chrono::milliseconds>(slice) +
+			                                      std::chrono::milliseconds(1));
+			RadioCheckInterrupted(context);
 		}
 	}
 
-	// After waiting, no messages found — return no rows
-	output.SetChildCardinality(0);
+	idx_t count = 0;
+	while (state.offset < state.subscriptions.size() && count < STANDARD_VECTOR_SIZE) {
+		auto &subscription = state.subscriptions[state.offset++];
+		FlatVector::GetDataMutable<uint64_t>(output.data[0])[count] = subscription->id();
+		FlatVector::GetDataMutable<string_t>(output.data[1])[count] =
+		    StringVector::AddStringOrBlob(output.data[1], subscription->url());
+		count++;
+	}
+	output.SetChildCardinality(count);
 }
 
-struct RadioReceivedMessagesBindData : public TableFunctionData {
-	explicit RadioReceivedMessagesBindData(Radio &radio) {
-		for (auto &subscription : radio.GetSubscriptions()) {
-			// Add all messages for each subscription.
-			for (auto &message : subscription->receive_snapshot()) {
-				messages_.emplace_back(message);
-			}
+struct RadioReceivedMessagesState : public GlobalTableFunctionState {
+	vector<std::shared_ptr<RadioReceivedMessage>> messages;
+	idx_t offset = 0;
+};
+
+static unique_ptr<GlobalTableFunctionState> RadioReceivedMessagesInit(ClientContext &context,
+                                                                      TableFunctionInitInput &input) {
+	auto state = make_uniq<RadioReceivedMessagesState>();
+	// Snapshot when the query executes; taking the snapshot marks the
+	// messages as seen.
+	for (auto &subscription : GetRadio(context).GetSubscriptions()) {
+		for (auto &message : subscription->receive_snapshot()) {
+			state->messages.emplace_back(message);
 		}
 	}
-
-	size_t current_row = 0;
-	vector<std::shared_ptr<RadioReceivedMessage>> messages_;
-};
+	return std::move(state);
+}
 
 static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context, TableFunctionBindInput &input,
                                                           vector<LogicalType> &return_types,
@@ -530,63 +472,60 @@ static unique_ptr<FunctionData> RadioReceivedMessagesBind(ClientContext &context
 	return_types.emplace_back(LogicalType(LogicalTypeId::BLOB));
 	names.emplace_back("message");
 
-	return make_uniq<RadioReceivedMessagesBindData>(GetRadio(context));
+	return make_uniq<TableFunctionData>();
 }
 
 void RadioReceivedMessages(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	D_ASSERT(data_p.bind_data);
-	auto &bind_data = data_p.bind_data->CastNoConst<RadioReceivedMessagesBindData>();
+	auto &state = data_p.global_state->Cast<RadioReceivedMessagesState>();
 
-	if (bind_data.current_row >= bind_data.messages_.size()) {
-		// No more messages to return.
-		output.SetChildCardinality(0);
-		return;
+	idx_t count = 0;
+	while (state.offset < state.messages.size() && count < STANDARD_VECTOR_SIZE) {
+		auto &message = state.messages[state.offset++];
+
+		FlatVector::GetDataMutable<uint64_t>(output.data[0])[count] = message->subscription_id();
+		FlatVector::GetDataMutable<string_t>(output.data[1])[count] =
+		    StringVector::AddStringOrBlob(output.data[1], message->subscription_url());
+		FlatVector::GetDataMutable<uint64_t>(output.data[2])[count] = message->id();
+		FlatVector::GetDataMutable<uint8_t>(output.data[3])[count] =
+		    RadioReceivedMessage::message_type_to_enum_index(message->type());
+		FlatVector::GetDataMutable<int64_t>(output.data[4])[count] = static_cast<int64_t>(message->receive_time());
+		FlatVector::GetDataMutable<uint64_t>(output.data[5])[count] = message->seen_count();
+		if (message->channel().has_value()) {
+			FlatVector::GetDataMutable<string_t>(output.data[6])[count] =
+			    StringVector::AddStringOrBlob(output.data[6], *message->channel());
+		} else {
+			FlatVector::SetNull(output.data[6], count, true);
+		}
+		FlatVector::GetDataMutable<string_t>(output.data[7])[count] =
+		    StringVector::AddStringOrBlob(output.data[7], message->message());
+		count++;
 	}
-
-	// Return a row at a time for now.
-	auto &message = bind_data.messages_[bind_data.current_row++];
-	output.SetChildCardinality(1);
-
-	// From the subscription
-	FlatVector::GetDataMutable<uint64_t>(output.data[0])[0] = message->subscription_id();
-	FlatVector::GetDataMutable<string_t>(output.data[1])[0] =
-	    StringVector::AddStringOrBlob(output.data[1], message->subscription_url());
-
-	// From the message
-	FlatVector::GetDataMutable<uint64_t>(output.data[2])[0] = message->id();
-	FlatVector::GetDataMutable<uint8_t>(output.data[3])[0] =
-	    RadioReceivedMessage::message_type_to_enum_index(message->type());
-
-	FlatVector::GetDataMutable<int64_t>(output.data[4])[0] = message->receive_time();
-	FlatVector::GetDataMutable<uint64_t>(output.data[5])[0] = message->seen_count();
-
-	if (message->channel().has_value()) {
-		FlatVector::GetDataMutable<string_t>(output.data[6])[0] =
-		    StringVector::AddStringOrBlob(output.data[6], *message->channel());
-	} else {
-		FlatVector::SetNull(output.data[6], 0, true);
-	}
-
-	FlatVector::GetDataMutable<string_t>(output.data[7])[0] =
-	    StringVector::AddStringOrBlob(output.data[7], message->message());
+	output.SetChildCardinality(count);
 }
 
 inline void RadioVersionFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
-	result.SetValue(0, Value("20250601.02"));
+	result.SetValue(0, Value(RADIO_EXTENSION_VERSION));
+}
+
+static void RegisterRadioTableFunction(ExtensionLoader &loader, TableFunction function, string description,
+                                       vector<string> examples) {
+	CreateTableFunctionInfo info(std::move(function));
+	info.descriptions.push_back(RadioDescribe(std::move(description), std::move(examples)));
+	loader.RegisterFunction(std::move(info));
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
-	// There are a few functions for the radio extension to process.
 	// Database-local state is destroyed by DatabaseInstance::object_cache.reset(),
 	// before extension dependencies can be unloaded.
 	GetRadio(loader.GetDatabaseInstance());
 
-	// This should take an optional parameter for max number of messages.
+	// Initializes Winsock on Windows (reference counted); a no-op elsewhere.
+	ix::initNetSystem();
 
 	auto subscribe_function =
 	    TableFunction("radio_subscribe", TableSignature({Positional("url", LogicalType::VARCHAR)}), RadioSubscribe,
-	                  RadioSubscribeBind);
+	                  RadioSubscribeBind, RadioSingleRowInit);
 	// Optional named parameters: a call that leaves one out does not pass it.
 	subscribe_function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
 		options.Add("receive_message_capacity", LogicalType::INTEGER)
@@ -594,43 +533,82 @@ static void LoadInternal(ExtensionLoader &loader) {
 		    .Add("transmit_retry_multiplier", LogicalType::DOUBLE)
 		    .Add("transmit_retry_max_delay_ms", LogicalType::INTEGER);
 	});
-	// "receive_error_capacity" (INTEGER) and "transmit_message_capacity" (INTEGER) are not exposed yet.
+	RegisterRadioTableFunction(
+	    loader, std::move(subscribe_function),
+	    "Subscribes to a WebSocket (ws://, wss://) or Redis pub/sub (redis://host:port?channel=name) URL and returns "
+	    "the subscription id. A loopback://name URL needs no server: messages transmitted on it are received by the "
+	    "same subscription. The connection is made in the background; subscribing to a URL that is already "
+	    "subscribed returns the existing subscription. Optional named parameters: receive_message_capacity (default "
+	    "1000; the oldest message is dropped when the receive queue is full), transmit_retry_initial_delay_ms "
+	    "(default 100), transmit_retry_multiplier (default 1.5) and transmit_retry_max_delay_ms (default 10000). "
+	    "Refuses network URLs when enable_external_access is false.",
+	    {"SELECT * FROM radio_subscribe('ws://localhost:8080/events')", "SELECT * FROM radio_subscribe('loopback://test')",
+	     "SELECT * FROM radio_subscribe('redis://localhost:6379?channel=alerts', receive_message_capacity := 10000)"});
 
-	loader.RegisterFunction(subscribe_function);
+	RegisterRadioTableFunction(
+	    loader,
+	    TableFunction("radio_unsubscribe", TableSignature({Positional("url", LogicalType::VARCHAR)}),
+	                  RadioUnsubscribe, RadioUnsubscribeBind, RadioSingleRowInit),
+	    "Closes the subscription for a URL, discarding its received and queued transmit messages, and returns the "
+	    "subscription id. Raises an error if the URL is not subscribed.",
+	    {"SELECT * FROM radio_unsubscribe('ws://localhost:8080/events')"});
 
-	auto unsubscribe_function =
-	    TableFunction("radio_unsubscribe", TableSignature({Positional("url", LogicalType::VARCHAR)}), RadioUnsubscribe,
-	                  RadioUnsubscribeBind);
-	loader.RegisterFunction(unsubscribe_function);
+	{
+		auto version_function = ScalarFunction("radio_version", {}, LogicalType::VARCHAR, RadioVersionFunction);
+		CreateScalarFunctionInfo info(std::move(version_function));
+		info.descriptions.push_back(
+		    RadioDescribe("Returns the version of the radio extension (YYYYMMDDNN).", {"radio_version()"}));
+		loader.RegisterFunction(std::move(info));
+	}
 
-	auto version_function = ScalarFunction("radio_version", {}, LogicalType::VARCHAR, RadioVersionFunction);
-	loader.RegisterFunction(version_function);
-
-	auto listen_function =
+	RegisterRadioTableFunction(
+	    loader,
 	    TableFunction("radio_listen",
 	                  TableSignature({Positional("wait_for_messages", LogicalType::BOOLEAN),
 	                                  Positional("timeout", LogicalType::INTERVAL)}),
-	                  RadioListen, RadioListenBind);
-	loader.RegisterFunction(listen_function);
+	                  RadioListen, RadioListenBind, RadioSubscriptionListInit),
+	    "Returns the subscriptions (id and URL) that hold received messages no query has read yet. When "
+	    "wait_for_messages is true and there are none, blocks until a message arrives or the timeout passes; the "
+	    "wait can be interrupted. Reading the messages, e.g. with radio_received_messages(), marks them as seen.",
+	    {"SELECT * FROM radio_listen(true, INTERVAL '10 seconds')", "SELECT * FROM radio_listen(false, INTERVAL '0 seconds')"});
 
-	auto flush_function = TableFunction("radio_flush", TableSignature({Positional("timeout", LogicalType::INTERVAL)}),
-	                                   RadioFlush, RadioFlushBind);
-	loader.RegisterFunction(flush_function);
+	RegisterRadioTableFunction(
+	    loader,
+	    TableFunction("radio_flush", TableSignature({Positional("timeout", LogicalType::INTERVAL)}), RadioFlush,
+	                  RadioFlushBind, RadioSingleRowInit),
+	    "Waits up to the timeout for every subscription's transmit queue to finish sending (or give up on) its "
+	    "pending messages. Returns true if all were flushed in time, false otherwise.",
+	    {"SELECT * FROM radio_flush(INTERVAL '5 seconds')"});
 
-	auto subscriptions_function = TableFunction("radio_subscriptions", {}, RadioSubscriptions, RadioSubscriptionsBind);
-	loader.RegisterFunction(subscriptions_function);
+	RegisterRadioTableFunction(
+	    loader, TableFunction("radio_subscriptions", {}, RadioSubscriptions, RadioSubscriptionsBind,
+	                          RadioSubscriptionListInit),
+	    "Lists the active subscriptions with their URL, creation and activation time, and receive/transmit queue "
+	    "statistics, including received_messages_queued and received_messages_dropped_unseen (messages evicted from "
+	    "a full receive queue before any query read them).",
+	    {"SELECT * FROM radio_subscriptions()",
+	     "SELECT url, received_messages_dropped_unseen FROM radio_subscriptions()"});
 
-	auto received_messages_function =
-	    TableFunction("radio_received_messages", {}, RadioReceivedMessages, RadioReceivedMessagesBind);
-	loader.RegisterFunction(received_messages_function);
+	RegisterRadioTableFunction(
+	    loader, TableFunction("radio_received_messages", {}, RadioReceivedMessages, RadioReceivedMessagesBind,
+	                          RadioReceivedMessagesInit),
+	    "Returns the messages held in the receive queues of all subscriptions: message, connection, disconnection "
+	    "and error events, with their receive time, channel and payload. Each read increments the messages' "
+	    "seen_count.",
+	    {"SELECT * FROM radio_received_messages()",
+	     "SELECT message::VARCHAR FROM radio_received_messages() WHERE message_type = 'message'"});
 
-	auto sleep_function = TableFunction("radio_sleep", TableSignature({Positional("duration", LogicalType::INTERVAL)}),
-	                                   RadioSleep, RadioSleepBind);
-	loader.RegisterFunction(sleep_function);
+	RegisterRadioTableFunction(
+	    loader,
+	    TableFunction("radio_sleep", TableSignature({Positional("duration", LogicalType::INTERVAL)}), RadioSleep,
+	                  RadioSleepBind, RadioSingleRowInit),
+	    "Sleeps for the given interval and returns true; the sleep can be interrupted. Useful in scripts that "
+	    "wait for messages to arrive.",
+	    {"SELECT * FROM radio_sleep(INTERVAL '1 second')"});
 
 	RadioSubscriptionAddFunctions(loader);
 
-	QueryFarmSendTelemetry(loader, "radio", "2026102101");
+	QueryFarmSendTelemetry(loader, "radio", RADIO_EXTENSION_VERSION);
 }
 
 void RadioExtension::Load(ExtensionLoader &loader) {

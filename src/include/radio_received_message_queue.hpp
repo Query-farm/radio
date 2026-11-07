@@ -10,6 +10,8 @@ namespace duckdb {
 struct RadioReceivedMessageQueueState {
 	uint64_t odometer = 0;
 
+	// Messages evicted because the queue was full (or shrunk) before any
+	// query had read them.
 	uint64_t dropped_unseen = 0;
 
 	uint64_t latest_receive_time = 0;
@@ -22,8 +24,6 @@ public:
 	}
 
 	void push(const std::vector<std::shared_ptr<RadioReceivedMessage>> &items);
-
-	std::shared_ptr<RadioReceivedMessage> pop();
 
 	[[nodiscard]] std::vector<std::shared_ptr<RadioReceivedMessage>> snapshot() const;
 

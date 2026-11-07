@@ -1,0 +1,129 @@
+# name: test/sql/radio_prepared.test
+# description: Prepared statements see current state on every execution
+# group: [radio]
+
+require radio
+
+statement ok
+PREPARE subs AS SELECT url FROM radio_subscriptions() ORDER BY url
+
+query I
+EXECUTE subs
+----
+
+statement ok
+PREPARE subscribe AS SELECT * FROM radio_subscribe('loopback://p')
+
+query I
+EXECUTE subscribe
+----
+0
+
+# Re-executing used to return no rows because the "done" flag lived in the bind data.
+query I
+EXECUTE subscribe
+----
+0
+
+query I
+EXECUTE subs
+----
+loopback://p
+
+statement ok
+PREPARE add_message AS SELECT * FROM radio_subscription_received_message_add('loopback://p', NULL, 'x')
+
+query I
+EXECUTE add_message
+----
+1000
+
+query I
+EXECUTE add_message
+----
+1001
+
+statement ok
+PREPARE received AS SELECT count(*) FROM radio_received_messages()
+
+query I
+EXECUTE received
+----
+2
+
+statement ok
+PREPARE listen AS SELECT subscription_url FROM radio_listen(false, INTERVAL '0 seconds')
+
+query I
+EXECUTE listen
+----
+
+statement ok
+CALL radio_subscription_received_message_add('loopback://p', NULL, 'y')
+
+query I
+EXECUTE listen
+----
+loopback://p
+
+query I
+EXECUTE received
+----
+3
+
+statement ok
+PREPARE transmit AS SELECT * FROM radio_transmit_message('loopback://p', NULL, 'z', 1, INTERVAL '1 minute')
+
+statement ok
+EXECUTE transmit
+
+statement ok
+EXECUTE transmit
+
+statement ok
+PREPARE flush AS SELECT * FROM radio_flush(INTERVAL '10 seconds')
+
+query I
+EXECUTE flush
+----
+true
+
+query I
+SELECT count(*) FROM radio_subscription_transmit_messages('loopback://p') WHERE state = 'sent'
+----
+2
+
+query I
+EXECUTE flush
+----
+true
+
+statement ok
+PREPARE sleep AS SELECT * FROM radio_sleep(INTERVAL '1 millisecond')
+
+query I
+EXECUTE sleep
+----
+true
+
+query I
+EXECUTE sleep
+----
+true
+
+statement ok
+PREPARE unsubscribe AS SELECT * FROM radio_unsubscribe('loopback://p')
+
+query I
+EXECUTE unsubscribe
+----
+0
+
+statement error
+EXECUTE unsubscribe
+----
+No subscription found for URL: loopback://p
+
+query I
+EXECUTE subs
+----

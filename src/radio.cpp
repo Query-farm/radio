@@ -118,7 +118,6 @@ void Radio::Shutdown() noexcept {
 			return;
 		}
 		shutting_down_ = true;
-		has_any_messages_ = true;
 		for (auto &entry : subscriptions_) {
 			subscriptions.push_back(std::move(entry.second));
 		}
@@ -170,17 +169,23 @@ bool Radio::IsActivelyTuned(const std::string &url) {
 void Radio::NotifyHasMessages() {
 	{
 		std::lock_guard<std::mutex> lock(mtx);
-		has_any_messages_ = true;
+		message_generation_++;
 	}
 	cv.notify_all();
 }
 
-bool Radio::WaitForMessages(std::chrono::milliseconds timeout) {
-	std::unique_lock<std::mutex> lock(mtx);
-	has_any_messages_ = false;
-	bool success = cv.wait_for(lock, timeout, [this] { return shutting_down_ || has_any_messages_; });
+uint64_t Radio::MessageGeneration() const {
+	std::lock_guard<std::mutex> lock(mtx);
+	return message_generation_;
+}
 
-	return success && has_any_messages_;
+bool Radio::WaitForMessages(uint64_t seen_generation, std::chrono::milliseconds timeout) {
+	// Waiters never reset shared state, so concurrent listeners cannot
+	// swallow each other's wake-ups, and a message that arrived after
+	// `seen_generation` was read is seen immediately.
+	std::unique_lock<std::mutex> lock(mtx);
+	cv.wait_for(lock, timeout, [&] { return shutting_down_ || message_generation_ != seen_generation; });
+	return message_generation_ != seen_generation;
 }
 
 } // namespace duckdb

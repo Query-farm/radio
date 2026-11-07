@@ -101,7 +101,12 @@ void RadioTransmitMessageQueue::senderLoop() {
 				result = "subscription stopped";
 			} else {
 				try {
-					if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(subscription_.connection)) {
+					if (subscription_.is_loopback()) {
+						subscription_.add_received_messages({{RadioReceivedMessage::MessageType::Message,
+						                                      next_msg->channel(), next_msg->message(),
+						                                      RadioCurrentTimeMillis()}});
+						success = true;
+					} else if (std::holds_alternative<std::unique_ptr<ix::WebSocket>>(subscription_.connection)) {
 						auto &websocket = std::get<std::unique_ptr<ix::WebSocket>>(subscription_.connection);
 						if (!websocket) {
 							throw std::runtime_error("WebSocket is not initialized");

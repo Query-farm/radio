@@ -2,6 +2,7 @@
 
 #include "duckdb.hpp"
 #include "radio.hpp"
+#include "duckdb/parser/parsed_data/create_function_info.hpp"
 
 namespace duckdb {
 
@@ -10,6 +11,9 @@ class DatabaseInstance;
 
 Radio &GetRadio(ClientContext &context);
 Radio &GetRadio(DatabaseInstance &db);
+
+// The description, examples and category shown by duckdb_functions().
+FunctionDescription RadioDescribe(string description, vector<string> examples);
 
 class RadioExtension : public Extension {
 public:

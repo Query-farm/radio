@@ -28,11 +28,20 @@ struct RadioReceiveMessageParts {
 
 class RadioSubscription {
 private:
-	enum class UrlType { WebSocket, Redis, Unknown };
+	enum class UrlType { WebSocket, Redis, Loopback, Unknown };
 	static UrlType detect_url_type(const std::string &url);
 	static std::string normalize_redis_url(const std::string &url);
 
 public:
+	// False for loopback:// URLs, which never touch the network.
+	static bool url_requires_network(const std::string &url) {
+		return detect_url_type(url) != UrlType::Loopback;
+	}
+
+	[[nodiscard]] bool is_loopback() const {
+		return url_type_ == UrlType::Loopback;
+	}
+
 	explicit RadioSubscription(const uint64_t id, const std::string &url, const RadioSubscriptionParameters &params,
 	                           uint64_t creation_time, Radio &radio);
 

@@ -1,0 +1,137 @@
+# name: test/sql/radio_receive_offline.test
+# description: The receive side (listen, received messages, seen counts, dropped counter) without a network
+# group: [radio]
+
+require radio
+
+query I
+SELECT * FROM radio_subscribe('loopback://rx', receive_message_capacity := 5000)
+----
+0
+
+# Subscribing again to the same URL returns the existing subscription.
+query I
+SELECT * FROM radio_subscribe('loopback://rx')
+----
+0
+
+query IIIII
+SELECT subscription_id, url, activation_time IS NOT NULL, received_messages_queued, received_messages_dropped_unseen
+FROM radio_subscriptions()
+----
+0	loopback://rx	true	0	0
+
+# Nothing has arrived: listen without waiting returns no rows.
+query II
+SELECT * FROM radio_listen(false, INTERVAL '0 seconds')
+----
+
+# Waiting with nothing arriving times out and returns no rows.
+query II
+SELECT * FROM radio_listen(true, INTERVAL '50 milliseconds')
+----
+
+query I
+SELECT * FROM radio_subscription_received_message_add('loopback://rx', 'chan', 'héllo 🦆')
+----
+1000
+
+query I
+SELECT * FROM radio_subscription_received_message_add('loopback://rx', NULL, '\x00\xFF'::BLOB)
+----
+1001
+
+query II
+SELECT * FROM radio_listen(false, INTERVAL '0 seconds')
+----
+0	loopback://rx
+
+query II
+SELECT * FROM radio_listen(true, INTERVAL '10 seconds')
+----
+0	loopback://rx
+
+# Reading the messages marks them as seen.
+query IIIIIIII
+SELECT subscription_id, subscription_url, message_id, message_type, seen_count, channel, octet_length(message),
+       CASE WHEN channel IS NULL THEN NULL ELSE decode(message) END
+FROM radio_received_messages() ORDER BY message_id
+----
+0	loopback://rx	1000	message	1	chan	11	héllo 🦆
+0	loopback://rx	1001	message	1	NULL	2	NULL
+
+query II
+SELECT * FROM radio_listen(false, INTERVAL '0 seconds')
+----
+
+query II
+SELECT message_id, seen_count FROM radio_subscription_received_messages('loopback://rx') ORDER BY message_id
+----
+1000	2
+1001	2
+
+query I
+SELECT received_messages_processed FROM radio_subscriptions()
+----
+2
+
+# More rows than one vector: results span several chunks.
+loop i 0 2100
+
+statement ok
+CALL radio_subscription_received_message_add('loopback://rx', 'bulk', 'm' || ${i})
+
+endloop
+
+query III
+SELECT count(*), count(DISTINCT message_id), max(seen_count) FROM radio_received_messages() WHERE channel = 'bulk'
+----
+2100	2100	1
+
+query I
+SELECT count(*) FROM radio_subscription_received_messages('loopback://rx')
+----
+2102
+
+statement ok
+CALL radio_unsubscribe('loopback://rx')
+
+# A full receive queue drops the oldest message; unread drops are counted.
+statement ok
+CALL radio_subscribe('loopback://small', receive_message_capacity := 2)
+
+loop i 0 5
+
+statement ok
+CALL radio_subscription_received_message_add('loopback://small', NULL, 'm' || ${i})
+
+endloop
+
+query III
+SELECT received_messages_processed, received_messages_queued, received_messages_dropped_unseen
+FROM radio_subscriptions()
+----
+5	2	3
+
+query I
+SELECT list(message::VARCHAR ORDER BY message_id) FROM radio_received_messages()
+----
+[m3, m4]
+
+# Evicting a message that was already read is not a loss.
+statement ok
+CALL radio_subscription_received_message_add('loopback://small', NULL, 'm5')
+
+query III
+SELECT received_messages_processed, received_messages_queued, received_messages_dropped_unseen
+FROM radio_subscriptions()
+----
+6	2	3
+
+statement ok
+CALL radio_unsubscribe('loopback://small')
+
+query I
+SELECT count(*) FROM radio_subscriptions()
+----
+0

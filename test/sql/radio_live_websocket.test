@@ -1,0 +1,61 @@
+# name: test/sql/radio_live_websocket.test
+# description: Round trip through a WebSocket echo server (set RADIO_TEST_WS_ECHO_URL to run)
+# group: [radio]
+
+require radio
+
+require-env RADIO_TEST_WS_ECHO_URL
+
+statement ok
+CALL radio_subscribe('{RADIO_TEST_WS_ECHO_URL}')
+
+# The connection event wakes radio_listen.
+query I
+SELECT count(*) FROM radio_listen(true, INTERVAL '10 seconds')
+----
+1
+
+statement ok
+CALL radio_sleep(INTERVAL '500 milliseconds')
+
+query I
+SELECT count(*) > 0 FROM radio_received_messages() WHERE message_type = 'connection'
+----
+true
+
+query I
+SELECT activation_time IS NOT NULL FROM radio_subscriptions()
+----
+true
+
+statement ok
+CALL radio_transmit_message('{RADIO_TEST_WS_ECHO_URL}', NULL, 'hello websocket ✓', 3, INTERVAL '10 seconds')
+
+statement ok
+CALL radio_transmit_message('{RADIO_TEST_WS_ECHO_URL}', NULL, '\x00\x01\x02'::BLOB, 3, INTERVAL '10 seconds')
+
+query I
+SELECT * FROM radio_flush(INTERVAL '10 seconds')
+----
+true
+
+statement ok
+CALL radio_sleep(INTERVAL '1 second')
+
+query I
+SELECT count(*) FROM radio_received_messages() WHERE message_type = 'message' AND decode(message) = 'hello websocket ✓'
+----
+1
+
+query I
+SELECT count(*) FROM radio_received_messages() WHERE message_type = 'message' AND message = '\x00\x01\x02'::BLOB
+----
+1
+
+query II
+SELECT count(*), count(*) FILTER (WHERE state = 'sent') FROM radio_subscription_transmit_messages('{RADIO_TEST_WS_ECHO_URL}')
+----
+2	2
+
+statement ok
+CALL radio_unsubscribe('{RADIO_TEST_WS_ECHO_URL}')

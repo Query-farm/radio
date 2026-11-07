@@ -1,0 +1,57 @@
+# name: test/sql/radio_metadata.test
+# description: Every radio function is documented in duckdb_functions()
+# group: [radio]
+
+require radio
+
+query I
+SELECT count(DISTINCT function_name) FROM duckdb_functions() WHERE function_name LIKE 'radio%'
+----
+14
+
+# Every function (and overload) has a description, at least one example and a category.
+query I
+SELECT function_name FROM duckdb_functions()
+WHERE function_name LIKE 'radio%'
+  AND (description IS NULL OR description = '' OR len(examples) = 0 OR len(categories) = 0)
+ORDER BY function_name;
+----
+
+query II
+SELECT DISTINCT function_name, categories FROM duckdb_functions()
+WHERE function_name LIKE 'radio%'
+ORDER BY function_name;
+----
+radio_flush	[messaging]
+radio_listen	[messaging]
+radio_received_messages	[messaging]
+radio_sleep	[messaging]
+radio_subscribe	[messaging]
+radio_subscription_received_message_add	[messaging]
+radio_subscription_received_messages	[messaging]
+radio_subscription_transmit_message_delete	[messaging]
+radio_subscription_transmit_messages	[messaging]
+radio_subscription_transmit_messages_delete_finished	[messaging]
+radio_subscriptions	[messaging]
+radio_transmit_message	[messaging]
+radio_unsubscribe	[messaging]
+radio_version	[messaging]
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM radio_subscriptions());
+----
+subscription_id	UBIGINT
+url	VARCHAR
+creation_time	TIMESTAMP_MS
+activation_time	TIMESTAMP_MS
+disabled	BOOLEAN
+received_last_message_time	TIMESTAMP_MS
+received_messages_processed	UBIGINT
+transmit_messages_processed	UBIGINT
+transmit_last_queue_time	TIMESTAMP_MS
+transmit_last_success_time	TIMESTAMP_MS
+transmit_last_failure_time	TIMESTAMP_MS
+transmit_successes	UBIGINT
+transmit_failures	UBIGINT
+received_messages_queued	UBIGINT
+received_messages_dropped_unseen	UBIGINT

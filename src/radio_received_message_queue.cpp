@@ -21,19 +21,6 @@ void RadioReceivedMessageQueue::push(const std::vector<std::shared_ptr<RadioRece
 	}
 }
 
-std::shared_ptr<RadioReceivedMessage> RadioReceivedMessageQueue::pop() {
-	std::lock_guard<std::mutex> lock(mtx);
-	if (queue_.empty()) {
-		return nullptr;
-	}
-	auto item = queue_.front();
-	if (item->seen_count() == 0) {
-		state_.dropped_unseen++;
-	}
-	queue_.pop_front();
-	return item;
-}
-
 std::vector<std::shared_ptr<RadioReceivedMessage>> RadioReceivedMessageQueue::snapshot() const {
 	std::lock_guard<std::mutex> lock(mtx);
 	for (const auto &item : queue_) {

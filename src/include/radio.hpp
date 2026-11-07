@@ -37,8 +37,15 @@ public:
 	// Notify listeners that a message has arrived on some subscription.
 	void NotifyHasMessages();
 
-	// Wait for any messags to arrive on any subscription.
-	bool WaitForMessages(std::chrono::milliseconds timeout);
+	// A counter that increases every time a message arrives on any
+	// subscription. Read it before scanning subscriptions, then pass it to
+	// WaitForMessages() so a message that arrives during the scan is not lost.
+	uint64_t MessageGeneration() const;
+
+	// Wait until a message arrives after `seen_generation` was read, the
+	// timeout passes, or the radio shuts down. Returns true if the message
+	// generation moved past `seen_generation`.
+	bool WaitForMessages(uint64_t seen_generation, std::chrono::milliseconds timeout);
 
 private:
 	// Need to protect the subscriptions map.
@@ -48,7 +55,7 @@ private:
 
 	// Used for people to wait for messages to arrive.
 	std::condition_variable cv;
-	bool has_any_messages_ = false;
+	uint64_t message_generation_ = 0;
 
 	uint64_t subscription_id_ = 0;
 	bool shutting_down_ = false;

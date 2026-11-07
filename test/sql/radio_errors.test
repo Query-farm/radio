@@ -1,0 +1,116 @@
+# name: test/sql/radio_errors.test
+# description: Argument validation, NULL handling and missing subscriptions
+# group: [radio]
+
+require radio
+
+statement error
+CALL radio_subscribe(NULL)
+----
+Invalid Input Error: radio_subscribe requires a non-NULL url
+
+statement error
+CALL radio_subscribe('loopback://e', receive_message_capacity := 0)
+----
+Binder Error: radio_subscribe requires receive_message_capacity to be greater than 0
+
+statement error
+CALL radio_subscribe('loopback://e', transmit_retry_initial_delay_ms := 0)
+----
+Binder Error: radio_subscribe requires transmit_retry_initial_delay_ms to be greater than 0
+
+statement error
+CALL radio_subscribe('loopback://e', transmit_retry_max_delay_ms := -1)
+----
+Binder Error: radio_subscribe requires transmit_retry_max_delay_ms to be greater than 0
+
+statement error
+CALL radio_subscribe('loopback://e', transmit_retry_multiplier := 1.0)
+----
+Binder Error: radio_subscribe requires transmit_retry_multiplier to be finite and greater than 1.0
+
+statement error
+CALL radio_subscribe('loopback://e', receive_message_capacity := NULL)
+----
+Binder Error: radio_subscribe requires receive_message_capacity to be non-NULL
+
+statement error
+CALL radio_subscribe('redis://127.0.0.1:1')
+----
+Invalid Input Error: No channel specified in Redis URL
+
+statement error
+CALL radio_unsubscribe('loopback://missing')
+----
+Invalid Input Error: No subscription found for URL: loopback://missing
+
+statement error
+SELECT * FROM radio_subscription_received_messages('loopback://missing')
+----
+Invalid Input Error: No subscription found for URL: loopback://missing
+
+statement error
+SELECT * FROM radio_subscription_transmit_messages('loopback://missing')
+----
+Invalid Input Error: No subscription found for URL: loopback://missing
+
+statement error
+CALL radio_transmit_message('loopback://missing', NULL, 'x', 1, INTERVAL '1 minute')
+----
+Invalid Input Error: No subscription found for URL: loopback://missing
+
+statement error
+CALL radio_subscription_received_message_add('loopback://missing', NULL, 'x')
+----
+Invalid Input Error: No subscription found for URL: loopback://missing
+
+statement error
+CALL radio_listen(NULL, INTERVAL '1 second')
+----
+Invalid Input Error: radio_listen requires a non-NULL wait_for_messages
+
+statement error
+CALL radio_listen(true, INTERVAL '-1 second')
+----
+Binder Error: radio_listen requires timeout to be a non-negative interval
+
+statement error
+CALL radio_flush(NULL)
+----
+Invalid Input Error: radio_flush requires a non-NULL timeout
+
+statement error
+CALL radio_sleep(INTERVAL '-1 second')
+----
+Binder Error: radio_sleep requires duration to be a non-negative interval
+
+statement ok
+CALL radio_subscribe('loopback://e')
+
+statement error
+CALL radio_transmit_message('loopback://e', NULL, 'x', 0, INTERVAL '1 minute')
+----
+Invalid Input Error: max_attempts must be a positive integer
+
+statement error
+CALL radio_transmit_message('loopback://e', NULL, 'x', NULL, INTERVAL '1 minute')
+----
+Invalid Input Error: radio_transmit_message requires a non-NULL max_attempts
+
+statement error
+CALL radio_transmit_message('loopback://e', NULL, 'x', 1, INTERVAL '-1 minute')
+----
+Invalid Input Error: expire_duration must be between 0 and 4294967295 milliseconds
+
+statement error
+CALL radio_subscription_transmit_message_delete('loopback://e', NULL)
+----
+Invalid Input Error: radio_subscription_transmit_message_delete requires a non-NULL message_id
+
+statement ok
+CALL radio_unsubscribe('loopback://e')
+
+query T
+SELECT regexp_full_match(radio_version(), '[0-9]{10}')
+----
+true
