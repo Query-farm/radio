@@ -26,7 +26,9 @@ jobs:
         main:
           config: extension_config.cmake
           toolchain: main
-      exclude_archs: wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw
+      # Windows: vcpkg builds ixwebsocket with mbedtls there, whose symbols collide
+      # with the mbedtls bundled in DuckDB (LNK2005). wasm: no sockets or threads.
+      exclude_archs: wasm_mvp;wasm_eh;wasm_threads;windows_amd64;windows_amd64_mingw
     secrets:
       ccache_remote_token: ${{ secrets.QUERY_FARM_CCACHE_TOKEN }}
   duckdb-deploy:
