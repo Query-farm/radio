@@ -13,6 +13,10 @@ set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
+if(WIN32)
+  # Keep windows.h (pulled in by the socket headers) from defining min/max macros.
+  add_definitions(-DNOMINMAX -DWIN32_LEAN_AND_MEAN)
+endif()
 include_directories(src/include)
 
 set(EXTENSION_SOURCES src/radio_extension.cpp
